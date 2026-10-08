@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import { router } from 'expo-router';
+import { Href, router } from 'expo-router';
 import { auth, db } from '../services/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
@@ -32,7 +32,7 @@ export default function LoginScreen() {
         if (userRole === 'ranger') {
           router.replace('/(ranger)');
         } else if (userRole === 'manager') {
-          router.replace('/(manager)/assign');
+          router.replace('/(manager)/index' as Href);
         } else if (userRole === 'researcher') {
           router.replace('/(researcher)/reports');
         } else {
