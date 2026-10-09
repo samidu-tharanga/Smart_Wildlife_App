@@ -1,24 +1,38 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { AppTheme } from '../../theme';
 import { Button } from '../../components/ui/Button';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function SuccessScreen() {
+  const { status } = useLocalSearchParams();
+  const { theme } = useTheme();
+
+  const isOffline = status === 'OFFLINE';
+
   const handleReturn = () => {
     router.replace('/(ranger)');
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
       <View style={styles.container}>
-        <Ionicons name="checkmark-circle" size={100} color={AppTheme.colors.success} />
+        <Ionicons 
+          name="checkmark-circle" 
+          size={100} 
+          color={isOffline ? AppTheme.colors.warning : AppTheme.colors.success} 
+        />
         
-        <Text style={styles.title}>Submission Successful</Text>
-        <Text style={styles.description}>
-          Your incident report has been securely saved and synchronized with headquarters.
+        <Text style={[styles.title, { color: theme.textPrimary }]}>
+          {isOffline ? 'Incident Saved' : 'Incident Report Submitted'}
+        </Text>
+        <Text style={[styles.description, { color: theme.textSecondary }]}>
+          {isOffline 
+            ? 'Your incident was saved on this device and will synchronize automatically when internet connection is restored.'
+            : 'Your incident report has been securely saved and synchronized with headquarters.'}
         </Text>
         
         <View style={styles.buttonContainer}>
@@ -32,7 +46,6 @@ export default function SuccessScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: AppTheme.colors.background,
   },
   container: {
     flex: 1,
@@ -42,14 +55,12 @@ const styles = StyleSheet.create({
   },
   title: {
     ...AppTheme.typography.h2,
-    color: AppTheme.colors.header,
     marginTop: AppTheme.spacing.lg,
     marginBottom: AppTheme.spacing.sm,
     textAlign: 'center',
   },
   description: {
     ...AppTheme.typography.body,
-    color: AppTheme.colors.textSecondary,
     textAlign: 'center',
     marginBottom: AppTheme.spacing.xxl,
   },

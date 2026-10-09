@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, TextInput, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { AppTheme } from '../../theme';
 import { IncidentType, LocationData } from '../../types/incident';
 import { IncidentTypeSelect } from '../../components/incident/IncidentTypeSelect';
@@ -13,6 +13,7 @@ import { useDeviceLocation } from '../../hooks/useDeviceLocation';
 import { useTheme } from '../../context/ThemeContext';
 
 export default function ReportIncidentScreen() {
+  const params = useLocalSearchParams<{ reset?: string }>();
   const [type, setType] = useState<IncidentType | null>(null);
   const [description, setDescription] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -21,6 +22,19 @@ export default function ReportIncidentScreen() {
   const { theme, isDarkMode } = useTheme();
   const { takePhoto, loading: cameraLoading } = useCamera();
   const { fetchLocation, loading: locationLoading, error: locationError } = useDeviceLocation();
+
+  useEffect(() => {
+    if (params.reset === 'true') {
+      setTimeout(() => {
+        setType(null);
+        setDescription('');
+        setPhotoUri(null);
+        setLocation(null);
+        setTouched(false);
+        router.setParams({ reset: undefined });
+      }, 0);
+    }
+  }, [params.reset]);
 
   // Validation
   const isValid = type !== null && description.trim().length > 0 && location !== null;

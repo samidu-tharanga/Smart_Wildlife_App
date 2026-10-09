@@ -29,6 +29,7 @@ import {
   ReportDateRange,
   ReportProgressStage,
 } from '../../services/reportService';
+import { IncidentReportsTab } from './IncidentReportsTab';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const bannerImage = require('../../assets/banner.jpg');
@@ -175,7 +176,7 @@ function TrendChart({ report, textColor }: { report: ConservationReport; textCol
   );
 }
 
-function SourceStateRow({ source, label, theme }: { source: ReportSource; label: string; theme: ReturnType<typeof useTheme>['theme'] }) {
+function SourceStateRow({ source, label, theme }: { source: SourceResult<any>; label: string; theme: ReturnType<typeof useTheme>['theme'] }) {
   const state = source.state;
   const color = state === 'available' ? COLORS.green : state === 'empty' ? COLORS.yellow : COLORS.slate;
   const icon = state === 'available' ? 'checkmark-circle-outline' : state === 'empty' ? 'alert-circle-outline' : 'remove-circle-outline';
@@ -536,6 +537,7 @@ export function ConservationReportsScreen({ audience }: { audience: 'Park manage
   const { theme } = useTheme();
   const today = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const [mainTab, setMainTab] = useState<'analytics' | 'incidents'>('analytics');
   const [kind, setKind] = useState<ReportKind>('overview');
   const [fromValue, setFromValue] = useState(localDateValue(monthStart));
   const [toValue, setToValue] = useState(localDateValue(today));
@@ -640,6 +642,31 @@ export function ConservationReportsScreen({ audience }: { audience: 'Park manage
             </View>
           </View>
         </View>
+
+        {audience === 'Park manager' && (
+          <View style={styles.tabBarContainer}>
+            <TouchableOpacity
+              style={[styles.mainTabBtn, mainTab === 'analytics' && styles.mainTabBtnActive]}
+              onPress={() => setMainTab('analytics')}
+            >
+              <Ionicons name="bar-chart-outline" size={16} color={mainTab === 'analytics' ? COLORS.primary : COLORS.slate} />
+              <Text style={[styles.mainTabText, mainTab === 'analytics' && styles.mainTabTextActive]}>Analytics Reports</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.mainTabBtn, mainTab === 'incidents' && styles.mainTabBtnActive]}
+              onPress={() => setMainTab('incidents')}
+            >
+              <Ionicons name="alert-circle-outline" size={16} color={mainTab === 'incidents' ? COLORS.primary : COLORS.slate} />
+              <Text style={[styles.mainTabText, mainTab === 'incidents' && styles.mainTabTextActive]}>Incident Reports</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {mainTab === 'incidents' ? (
+          <IncidentReportsTab />
+        ) : (
+          <View style={{ gap: 16 }}>
 
         {viewState !== 'results' && viewState !== 'empty' && (
           <View style={styles.filterSection}>
@@ -825,6 +852,8 @@ export function ConservationReportsScreen({ audience }: { audience: 'Park manage
             </View>
           </>
         )}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -868,6 +897,11 @@ const styles = StyleSheet.create({
   headerEyebrow: { color: '#BBDEFB', fontSize: 9, fontWeight: '700' },
   headerTitle: { color: COLORS.white, fontSize: 21, fontWeight: '700', marginTop: 4 },
   headerSubtitle: { color: '#E3F2FD', fontSize: 12, marginTop: 3 },
+  tabBarContainer: { flexDirection: 'row', backgroundColor: '#E2E8F0', padding: 4, borderRadius: 8, marginBottom: 16, gap: 4 },
+  mainTabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 6 },
+  mainTabBtnActive: { backgroundColor: COLORS.white, elevation: 1 },
+  mainTabText: { fontSize: 13, fontWeight: '600', color: COLORS.slate },
+  mainTabTextActive: { color: COLORS.primary, fontWeight: '700' },
   filterSection: { backgroundColor: COLORS.white, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, padding: 15, marginBottom: 16 },
   fieldLabel: { fontSize: 14, fontWeight: '700', marginBottom: 9 },
   typeOptions: { gap: 8, paddingRight: 4 },
@@ -963,6 +997,7 @@ const styles = StyleSheet.create({
   sourceState: { flex: 1, fontSize: 9, textAlign: 'right' },
   emptySource: { minHeight: 68, borderRadius: 6, borderWidth: 1, borderColor: COLORS.border, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 9 },
   emptySourceText: { flex: 1, color: COLORS.slate, fontSize: 12, lineHeight: 17 },
+  sourceList: { gap: 8, marginTop: 12 },
   generatedAt: { fontSize: 10, textAlign: 'right', marginTop: 2 },
   resultActions: { gap: 9, marginTop: 14 },
   shareButton: { minHeight: 44, borderWidth: 1, borderColor: COLORS.primary, borderRadius: 6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },

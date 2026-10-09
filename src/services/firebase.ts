@@ -4,6 +4,7 @@ import { initializeAuth, getReactNativePersistence, getAuth, Auth } from 'fireba
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 const cleanEnv = (val?: string) => val ? val.trim().replace(/^["']|["']$/g, '') : '';
 
@@ -16,17 +17,27 @@ const firebaseConfig = {
   appId: cleanEnv(process.env.EXPO_PUBLIC_FIREBASE_APP_ID)
 };
 
-// Handle hot-reloading properly to avoid "already-initialized" errors
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 let auth: Auth;
 try {
-  // Initialize Firebase Auth with AsyncStorage
-  auth = initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage)
-  });
+  if (Platform.OS === 'web') {
+    auth = getAuth(app);
+  } else {
+    let persistenceObj;
+    try {
+      if (typeof getReactNativePersistence !== 'undefined') {
+        persistenceObj = getReactNativePersistence(AsyncStorage);
+      }
+    } catch(e) {}
+    
+    if (persistenceObj) {
+      auth = initializeAuth(app, { persistence: persistenceObj });
+    } else {
+      auth = getAuth(app);
+    }
+  }
 } catch (error: any) {
-  // If already initialized (e.g., during Fast Refresh), safely get the existing instance
   if (error.code === 'auth/already-initialized') {
     auth = getAuth(app);
   } else {
