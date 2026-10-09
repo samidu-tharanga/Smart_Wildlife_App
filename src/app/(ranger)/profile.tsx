@@ -25,7 +25,7 @@ export default function ProfileScreen() {
     try {
       setLoading(true);
       await signOut(auth);
-      router.replace('/');
+      setTimeout(() => router.replace('/login'), 100);
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {

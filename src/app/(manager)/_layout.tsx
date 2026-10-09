@@ -11,7 +11,7 @@ export default function TabLayout() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      router.replace('/');
+      setTimeout(() => router.replace('/login'), 100);
     } catch (error: any) {
       Alert.alert('Error', error.message);
     }
@@ -44,8 +44,25 @@ export default function TabLayout() {
         options={{ title: 'Monitor', tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size} color={color} /> }}
       />
       <Tabs.Screen
+        name="manage"
+        options={{ title: 'Manage', tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} /> }}
+      />
+      <Tabs.Screen
         name="reports"
         options={{ title: 'Reports', tabBarIcon: ({ color, size }) => <Ionicons name="bar-chart-outline" size={size} color={color} /> }}
+      />
+      {/* Hidden Screens (Not in Bottom Tab Bar) */}
+      <Tabs.Screen
+        name="danger-zones"
+        options={{ href: null, title: 'Danger Zones' }}
+      />
+      <Tabs.Screen
+        name="manage-animals"
+        options={{ href: null, title: 'Manage Animals' }}
+      />
+      <Tabs.Screen
+        name="all-alerts"
+        options={{ href: null, title: 'All Alerts' }}
       />
     </Tabs>
   );
