@@ -18,11 +18,9 @@ import { useTheme } from '../../context/ThemeContext';
 import {
   ConservationReport,
   Hotspot,
-  Recommendation,
   REPORT_DEFINITIONS,
   ReportKind,
-  ReportSource,
-  ThreatAssessment,
+  SourceResult,
 } from '../../services/reportAnalytics';
 import {
   generateConservationReport,
@@ -31,7 +29,6 @@ import {
 } from '../../services/reportService';
 import { IncidentReportsTab } from './IncidentReportsTab';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const bannerImage = require('../../assets/banner.jpg');
 
 const COLORS = {
