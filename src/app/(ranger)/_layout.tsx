@@ -76,6 +76,18 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="my-incidents"
+        options={{
+          title: 'My Incidents',
+          href: null,
+          headerLeft: () => (
+            <TouchableOpacity onPress={() => router.back()} style={{ marginLeft: AppTheme.spacing.md }}>
+              <Ionicons name="arrow-back" size={24} color={AppTheme.colors.background} />
+            </TouchableOpacity>
+          )
+        }}
+      />
+      <Tabs.Screen
         name="patrol-session"
         options={{
           href: null,

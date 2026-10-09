@@ -4,66 +4,131 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { animalPaths, staticAnimals } from '../../utils/dummyData';
+import { DangerZone, subscribeToDangerZones, LatLng } from '../../services/dangerZoneService';
+import { Animal, subscribeToAnimals } from '../../services/animalService';
+import { IncidentService } from '../../services/incidentService';
 
 export default function TrackingScreen() {
   const { theme } = useTheme();
   const webViewRef = useRef<WebView>(null);
   
-  const [step, setStep] = useState(0);
   const [showAlert, setShowAlert] = useState(false);
+  const [currentBreach, setCurrentBreach] = useState<any>(null);
   const [isSimulating, setIsSimulating] = useState(false);
   const [activeFilter, setActiveFilter] = useState('All');
+  
+  const [dangerZones, setDangerZones] = useState<DangerZone[]>([]);
+  const [animals, setAnimals] = useState<Animal[]>([]);
+  
+  // To keep track of current dynamic positions
+  const positionsRef = useRef<Record<string, {lat: number, lng: number}>>({});
 
-  const checkDangerZone = (lat: number, lng: number) => {
-    return (lat >= 6.3745 && lat <= 6.3805 && lng >= 81.5115 && lng <= 81.5165);
+  useEffect(() => {
+    const unsubZones = subscribeToDangerZones(setDangerZones);
+    const unsubAnimals = subscribeToAnimals((data) => {
+      setAnimals(data);
+      // Initialize positions for new animals
+      const newPos = { ...positionsRef.current };
+      data.forEach(a => {
+        if (!newPos[a.id]) {
+          newPos[a.id] = { lat: a.lat, lng: a.lng };
+        }
+      });
+      positionsRef.current = newPos;
+    });
+
+    return () => { unsubZones(); unsubAnimals(); };
+  }, []);
+
+  const isPointInPolygon = (point: LatLng, vs: LatLng[]) => {
+    let x = point.lng, y = point.lat;
+    let inside = false;
+    for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+      let xi = vs[i].lng, yi = vs[i].lat;
+      let xj = vs[j].lng, yj = vs[j].lat;
+      let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const checkDangerZone = async (animal: Animal, lat: number, lng: number) => {
+    for (const zone of dangerZones) {
+      if (isPointInPolygon({ lat, lng }, zone.points)) {
+        if (!showAlert) {
+            setCurrentBreach({
+              animalName: animal.name,
+              species: animal.species,
+              zoneName: zone.name,
+              lat,
+              lng
+            });
+            setShowAlert(true);
+            setIsSimulating(false);
+          }
+        return true;
+      }
+    }
+    return false;
   };
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: any;
     if (isSimulating) {
       timer = setInterval(() => {
-        setStep((currentStep) => {
-          const nextStep = (currentStep + 1) % 10;
-          const eLat = animalPaths["E-024"][nextStep].lat;
-          const eLng = animalPaths["E-024"][nextStep].lng;
-          const lLat = animalPaths["L-011"][nextStep].lat;
-          const lLng = animalPaths["L-011"][nextStep].lng;
+        let updates: any[] = [];
+        
+        animals.forEach(animal => {
+          let pos = positionsRef.current[animal.id];
+          if (!pos) return;
+          
 
-          if (checkDangerZone(eLat, eLng) && !showAlert) {
-            setShowAlert(true);
-            setIsSimulating(false); 
-          }
+          // Move randomly by a very small amount
+          const dLat = (Math.random() - 0.5) * 0.001;
+          const dLng = (Math.random() - 0.5) * 0.001;
+          let newLat = pos.lat + dLat;
+          let newLng = pos.lng + dLng;
+          
+          // Yala rough bounds
+          const YALA_MIN_LAT = 6.3650;
+          const YALA_MAX_LAT = 6.3850;
+          const YALA_MIN_LNG = 81.5000;
+          const YALA_MAX_LNG = 81.5250;
 
-          const script = `
-            if (typeof elephantMarker !== 'undefined') {
-                elephantMarker.setLatLng([${eLat}, ${eLng}]);
-                leopardMarker.setLatLng([${lLat}, ${lLng}]);
-            }
-            true;
-          `;
-          if (webViewRef.current) webViewRef.current.injectJavaScript(script);
-          return nextStep;
+          if (newLat < YALA_MIN_LAT) newLat = YALA_MIN_LAT + 0.0005;
+          if (newLat > YALA_MAX_LAT) newLat = YALA_MAX_LAT - 0.0005;
+          if (newLng < YALA_MIN_LNG) newLng = YALA_MIN_LNG + 0.0005;
+          if (newLng > YALA_MAX_LNG) newLng = YALA_MAX_LNG - 0.0005;
+
+          
+          positionsRef.current[animal.id] = { lat: newLat, lng: newLng };
+          updates.push({ id: animal.id, lat: newLat, lng: newLng });
+          
+          checkDangerZone(animal, newLat, newLng);
         });
+
+        const script = `
+          if (typeof updateMarkers !== 'undefined') {
+              updateMarkers(${JSON.stringify(updates)});
+          }
+          true;
+        `;
+        if (webViewRef.current) webViewRef.current.injectJavaScript(script);
       }, 3000);
     }
     return () => clearInterval(timer);
-  }, [isSimulating, showAlert]);
+  }, [isSimulating, animals, dangerZones, showAlert]);
 
-  const handleAcknowledge = () => {
-    setShowAlert(false); 
-    Alert.alert("Alert Acknowledged", "The high-risk alert has been acknowledged successfully.");
+  const toggleSimulation = () => {
+    if (!isSimulating && showAlert) setShowAlert(false);
+    setIsSimulating(!isSimulating);
   };
 
-  const filteredAnimals = activeFilter === 'All' 
-    ? staticAnimals 
-    : staticAnimals.filter(a => activeFilter === 'Elephants' ? a.type === 'elephant' : a.type === 'leopard');
-  
-  const staticAnimalsScript = filteredAnimals.map(animal => `
-    var icon = ${animal.type === 'elephant'} ? elephantIcon : leopardIcon;
-    var m = L.marker([${animal.lat}, ${animal.lng}], {icon: icon}).bindPopup("<b>${animal.id}</b>");
-    markers.addLayer(m);
-  `).join('');
+  useEffect(() => {
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`if (typeof filterMarkers !== 'undefined') { filterMarkers('${activeFilter}'); } true;`);
+    }
+  }, [activeFilter]);
 
   const mapHtml = `
     <!DOCTYPE html>
@@ -71,257 +136,263 @@ export default function TrackingScreen() {
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-        <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
         <style>
             body { padding: 0; margin: 0; }
             html, body, #map { height: 100%; width: 100%; }
-            .custom-emoji-icon { background: none; border: none; }
         </style>
     </head>
     <body>
         <div id="map"></div>
         <script>
-            var map = L.map('map').setView([6.3700, 81.5100], 14); 
+            var map = L.map('map').setView([6.3750, 81.5140], 14);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-            var elephantIcon = L.divIcon({ html: '<div style="font-size: 30px;">🐘</div>', className: 'custom-emoji-icon', iconSize: [30, 30], iconAnchor: [15, 15] });
-            var leopardIcon = L.divIcon({ html: '<div style="font-size: 30px;">🐆</div>', className: 'custom-emoji-icon', iconSize: [30, 30], iconAnchor: [15, 15] });
+            var dangerZones = ${JSON.stringify(dangerZones)};
+            dangerZones.forEach(function(zone) {
+                var latlngs = zone.points.map(function(p) { return [p.lat, p.lng]; });
+                L.polygon(latlngs, {color: "#d32f2f", weight: 2, fillOpacity: 0.2}).addTo(map).bindPopup(zone.name);
+            });
 
-            var dangerBounds = [[6.3750, 81.5120], [6.3800, 81.5160]];
-            L.rectangle(dangerBounds, {color: "#d32f2f", weight: 2, fillOpacity: 0.2}).addTo(map);
+            var markers = {};
+            var animals = ${JSON.stringify(animals)};
+            var initialPositions = ${JSON.stringify(positionsRef.current)};
             
-            var markers = L.markerClusterGroup({ maxClusterRadius: 40 });
-            ${staticAnimalsScript}
-            map.addLayer(markers);
+            function getAnimalEmoji(species) {
+                const s = species.toLowerCase();
+                if (s.includes('elephant')) return '🐘';
+                if (s.includes('leopard')) return '🐆';
+                if (s.includes('bear')) return '🐻';
+                if (s.includes('boar')) return '🐗';
+                if (s.includes('deer')) return '🦌';
+                return '🐾';
+            }
 
-            ${activeFilter === 'All' || activeFilter === 'Elephants' ? `var elephantMarker = L.marker([${animalPaths["E-024"][step].lat}, ${animalPaths["E-024"][step].lng}], {icon: elephantIcon}).addTo(map).bindPopup("<b>E-024</b>").openPopup();` : ''}
-            ${activeFilter === 'All' || activeFilter === 'Leopards' ? `var leopardMarker = L.marker([${animalPaths["L-011"][step].lat}, ${animalPaths["L-011"][step].lng}], {icon: leopardIcon}).addTo(map).bindPopup("<b>L-011</b>");` : ''}
+            animals.forEach(function(a) {
+                var pos = initialPositions[a.id] || {lat: a.lat, lng: a.lng};
+                
+                var emojiIcon = L.divIcon({
+                    html: '<div style="font-size: 24px; text-align: center; line-height: 24px;">' + getAnimalEmoji(a.species) + '</div>',
+                    className: 'animal-emoji-icon',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+
+                markers[a.id] = L.marker([pos.lat, pos.lng], {icon: emojiIcon}).addTo(map)
+                    .bindPopup("<b>" + a.name + "</b><br>" + a.species);
+            });
+
+            function updateMarkers(updates) {
+                updates.forEach(function(u) {
+                    if (markers[u.id]) {
+                        markers[u.id].setLatLng([u.lat, u.lng]);
+                    }
+                });
+            }
+            function filterMarkers(filterStr) {
+                var filter = filterStr.toLowerCase();
+                animals.forEach(function(a) {
+                    var s = a.species.toLowerCase();
+                    var m = markers[a.id];
+                    if (!m) return;
+                    
+                    var show = false;
+                    if (filter === 'all' || filter === 'tracked') show = true;
+                    else if (filter === 'elephants' && s.includes('elephant')) show = true;
+                    else if (filter === 'leopards' && s.includes('leopard')) show = true;
+                    
+                    if (show) {
+                        if (!map.hasLayer(m)) map.addLayer(m);
+                    } else {
+                        if (map.hasLayer(m)) map.removeLayer(m);
+                    }
+                });
+            }
         </script>
     </body>
     </html>
   `;
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: '#F5F8FB' }]} edges={['top']}>
-      
-      <ScrollView showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+        <View style={styles.headerTitleContainer}>
+          <Text style={[styles.headerTitle, { color: theme.textPrimary }]}>Live Tracking</Text>
+          <View style={styles.liveBadge}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>SYNCED</Text>
+          </View>
+        </View>
+        <Ionicons name="notifications-outline" size={24} color={theme.textPrimary} />
+      </View>
+
+      <View style={styles.mapContainer}>
+        <WebView 
+          ref={webViewRef}
+          source={{ html: mapHtml }}
+          style={styles.map}
+          scrollEnabled={false}
+        />
         
-        {/* Search Bar & Filters */}
-        <View style={styles.topSection}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={20} color="#888" />
-            <Text style={styles.searchText}>Search animal ID or species</Text>
-          </View>
+        <View style={styles.controlsOverlay}>
+          <TouchableOpacity 
+            style={[styles.simButton, isSimulating ? styles.simButtonActive : {}]} 
+            onPress={toggleSimulation}
+          >
+            <Ionicons name={isSimulating ? "pause" : "play"} size={20} color="#fff" />
+            <Text style={styles.simButtonText}>{isSimulating ? "Pause Animals" : "Start Animals"}</Text>
+          </TouchableOpacity>
+        </View>
 
-          <View style={styles.filterRow}>
-            {['All', 'Elephants', 'Leopards', 'Deer'].map((f) => (
-              <TouchableOpacity 
-                key={f}
-                style={[styles.filterChip, activeFilter === f && styles.filterChipActive]}
-                onPress={() => setActiveFilter(f)}
-              >
-                <Text style={[styles.filterText, activeFilter === f && styles.filterTextActive]}>{f}</Text>
-              </TouchableOpacity>
-            ))}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
+          {['All', 'Elephants', 'Leopards', 'Tracked'].map(filter => (
+            <TouchableOpacity 
+              key={filter}
+              style={[styles.filterPill, activeFilter === filter ? styles.filterPillActive : { backgroundColor: theme.cardBg, borderColor: theme.border }]}
+              onPress={() => setActiveFilter(filter)}
+            >
+              <Text style={[styles.filterText, activeFilter === filter ? styles.filterTextActive : { color: theme.textSecondary }]}>{filter}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      <View style={[styles.statsContainer, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+        <View style={[styles.statBox, { borderRightColor: theme.border }]}>
+          <Text style={[styles.statValue, { color: '#0D47A1' }]}>{animals.length}</Text>
+          <View style={styles.statLabelRow}>
+            <Text style={styles.statLabel}>Tracked</Text>
+            <MaterialCommunityIcons name="elephant" size={14} color="#0D47A1" style={{marginLeft: 4}} />
+          </View>
+        </View>
+        
+        <View style={[styles.statBox, { borderRightColor: theme.border }]}>
+          <Text style={[styles.statValue, { color: '#2E7D32' }]}>{animals.length > 0 ? animals.length - 1 : 0}</Text>
+          <View style={styles.statLabelRow}>
+            <Text style={styles.statLabel}>Safe</Text>
+            <Ionicons name="shield-checkmark" size={14} color="#2E7D32" style={{marginLeft: 4}} />
           </View>
         </View>
 
-        {/* Map Container */}
-        <View style={styles.mapContainer}>
-          <WebView source={{ html: mapHtml }} style={styles.map} scrollEnabled={false} />
-          <View style={styles.mapOverlayLabel}>
-            <Ionicons name="map" size={16} color="#0D47A1" />
-            <Text style={styles.mapOverlayText}> Map / Live Locations</Text>
+        <View style={[styles.statBox, { borderRightWidth: 0 }]}>
+          <Text style={[styles.statValue, { color: '#D32F2F' }]}>{animals.length > 0 ? 1 : 0}</Text>
+          <View style={styles.statLabelRow}>
+            <Text style={styles.statLabel}>High-Risk</Text>
+            <Ionicons name="warning" size={14} color="#D32F2F" style={{marginLeft: 4}} />
           </View>
         </View>
+      </View>
 
-        {/* Stats Row */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, { color: '#0D47A1' }]}>12</Text>
-            <View style={styles.statLabelRow}>
-              <Text style={styles.statLabel}>Tracked</Text>
-              <MaterialCommunityIcons name="elephant" size={14} color="#0D47A1" style={{marginLeft: 4}} />
-            </View>
-          </View>
-          
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, { color: '#2E7D32' }]}>10</Text>
-            <View style={styles.statLabelRow}>
-              <Text style={styles.statLabel}>Safe</Text>
-              <Ionicons name="shield-checkmark" size={14} color="#2E7D32" style={{marginLeft: 4}} />
-            </View>
-          </View>
 
-          <View style={[styles.statBox, { borderRightWidth: 0 }]}>
-            <Text style={[styles.statValue, { color: '#D32F2F' }]}>2</Text>
-            <View style={styles.statLabelRow}>
-              <Text style={styles.statLabel}>High-Risk</Text>
-              <Ionicons name="warning" size={14} color="#D32F2F" style={{marginLeft: 4}} />
-            </View>
-          </View>
+      {/* Recent Updates List */}
+      <ScrollView style={[styles.updatesContainer, { backgroundColor: theme.cardBg, borderColor: theme.border }]} showsVerticalScrollIndicator={false}>
+        <View style={styles.updatesHeader}>
+          <Text style={[styles.updatesTitle, { color: theme.textPrimary }]}>Recent Updates</Text>
+          <TouchableOpacity><Text style={styles.viewAllText}>View All {'>'}</Text></TouchableOpacity>
         </View>
 
-        {/* Recent Updates List */}
-        <View style={styles.updatesContainer}>
-          <View style={styles.updatesHeader}>
-            <Text style={styles.updatesTitle}>Recent Updates</Text>
-            <TouchableOpacity><Text style={styles.viewAllText}>View All ></Text></TouchableOpacity>
-          </View>
-
-          {/* Update Item 1 */}
-          <View style={styles.updateItem}>
-            <View style={styles.animalIconBox}>
-              <MaterialCommunityIcons name="elephant" size={24} color="#546E7A" />
+        {animals.slice(0, 3).map((a, i) => (
+          <View key={a.id} style={styles.updateItem}>
+            <View style={[styles.animalIconBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
+              <MaterialCommunityIcons name={a.species.toLowerCase().includes('elephant') ? 'elephant' : 'paw'} size={24} color={theme.textSecondary} />
             </View>
             <View style={styles.updateTextCol}>
-              <Text style={styles.animalId}>E-024</Text>
-              <Text style={styles.animalStatus}>Moved to North Boundary</Text>
+              <Text style={[styles.animalId, { color: theme.textPrimary }]}>{a.name} ({a.id})</Text>
+              <Text style={styles.animalStatus}>{i === 0 ? 'Moved near boundary' : 'In Safe Zone'}</Text>
             </View>
             <View style={styles.updateMetaCol}>
-              <Text style={styles.updateTime}>10:15 AM</Text>
+              <Text style={styles.updateTime}>Just now</Text>
               <Ionicons name="chevron-forward" size={18} color="#aaa" />
             </View>
           </View>
-
-          {/* Update Item 2 */}
-          <View style={styles.updateItem}>
-            <View style={styles.animalIconBox}>
-              <MaterialCommunityIcons name="elephant" size={24} color="#546E7A" />
-            </View>
-            <View style={styles.updateTextCol}>
-              <Text style={styles.animalId}>E-011</Text>
-              <Text style={styles.animalStatus}>In Safe Zone</Text>
-            </View>
-            <View style={styles.updateMetaCol}>
-              <Text style={styles.updateTime}>09:45 AM</Text>
-              <Ionicons name="chevron-forward" size={18} color="#aaa" />
-            </View>
-          </View>
-          
-          {/* Update Item 3 */}
-          <View style={styles.updateItem}>
-            <View style={styles.animalIconBox}>
-              <MaterialCommunityIcons name="elephant" size={24} color="#546E7A" />
-            </View>
-            <View style={styles.updateTextCol}>
-              <Text style={styles.animalId}>E-015</Text>
-              <Text style={styles.animalStatus}>No Signal</Text>
-            </View>
-            <View style={styles.updateMetaCol}>
-              <Text style={styles.updateTime}>08:30 AM</Text>
-              <Ionicons name="chevron-forward" size={18} color="#aaa" />
-            </View>
-          </View>
-        </View>
-        <View style={{height: 40}} />
+        ))}
       </ScrollView>
 
-      {/* Floating Action for Demo Simulation */}
-      <TouchableOpacity 
-        style={[styles.simButton, { backgroundColor: isSimulating ? '#D32F2F' : '#1565C0' }]}
-        onPress={() => setIsSimulating(!isSimulating)}
-      >
-        <Ionicons name={isSimulating ? "stop-circle" : "play-circle"} size={24} color="#fff" />
-      </TouchableOpacity>
-
-      {/* Wireframe-matched Alert Modal */}
-      <Modal visible={showAlert} transparent={true} animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            
-            <View style={styles.modalHeader}>
-              <Ionicons name="arrow-back" size={24} color="#000" onPress={() => setShowAlert(false)} />
-              <Text style={styles.modalHeaderTitle}>High-Risk Alert</Text>
-              <View style={{width: 24}} /> 
+      <Modal visible={showAlert} transparent animationType="fade">
+        <View style={styles.modalContainer}>
+          <View style={[styles.alertBox, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+            <View style={styles.alertIconBg}>
+              <Ionicons name="warning" size={32} color="#D32F2F" />
             </View>
-
-            <Ionicons name="warning" size={80} color="#D32F2F" style={{alignSelf: 'center', marginVertical: 15}} />
+            <Text style={[styles.alertTitle, { color: theme.textPrimary }]}>DANGER ZONE BREACH</Text>
+            <Text style={[styles.alertDesc, { color: theme.textSecondary }]}>
+              An animal has crossed a village boundary! Notify the manager to assign a patrol.
+            </Text>
             
-            <Text style={styles.modalTitle}>High-Risk Zone Entered</Text>
-            <Text style={styles.modalDesc}>Elephant E-024 has entered a high-risk zone (Farmland Area) at 10:22 AM.</Text>
-            
-            <View style={styles.miniMapPlaceholder}>
-               <Ionicons name="location" size={40} color="#1565C0" />
+            <View style={styles.alertActions}>
+              <TouchableOpacity style={styles.dismissBtn} onPress={() => { setShowAlert(false); setCurrentBreach(null); }}>
+                <Text style={styles.dismissText}>Dismiss</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.dispatchBtn} onPress={async () => {
+                if (currentBreach) {
+                    await IncidentService.submitIncident({
+                        type: currentBreach.species + ' breach',
+                        description: currentBreach.species + ' breached ' + currentBreach.zone,
+                        latitude: currentBreach.lat || 0,
+                        longitude: currentBreach.lng || 0
+                    });
+                    Alert.alert("Success", "Manager has been notified!");
+                    setShowAlert(false);
+                    setCurrentBreach(null);
+                }
+              }}>
+                <Ionicons name="send" size={16} color="#fff" style={{marginRight: 5}} />
+                <Text style={styles.dispatchText}>Notify Manager</Text>
+              </TouchableOpacity>
             </View>
-
-            <View style={{width: '100%', marginBottom: 20}}>
-              <Text style={{fontSize: 13, fontWeight: 'bold', color: '#000'}}>Location</Text>
-              <Text style={{fontSize: 13, color: '#666', marginTop: 2}}>North Boundary Farmland</Text>
-            </View>
-
-            <TouchableOpacity style={styles.btnPrimary} onPress={() => {}}>
-              <Text style={styles.btnPrimaryText}>View Details</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.btnSecondary} onPress={handleAcknowledge}>
-              <Text style={styles.btnSecondaryText}>Acknowledge Alert</Text>
-            </TouchableOpacity>
-            
           </View>
         </View>
       </Modal>
-
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  
-  header: { backgroundColor: '#1565C0', padding: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  notificationDot: { position: 'absolute', right: 18, top: 18, width: 10, height: 10, backgroundColor: '#D32F2F', borderRadius: 5, borderWidth: 1, borderColor: '#1565C0' },
 
-  topSection: { padding: 15, backgroundColor: '#fff' },
-  searchBar: { flexDirection: 'row', backgroundColor: '#F5F8FB', padding: 12, borderRadius: 8, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#D9E5EF' },
-  searchText: { color: '#888', marginLeft: 10, fontSize: 14 },
-  
-  filterRow: { flexDirection: 'row', gap: 10 },
-  filterChip: { backgroundColor: '#F5F8FB', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#D9E5EF' },
-  filterChipActive: { backgroundColor: '#1565C0', borderColor: '#1565C0' },
-  filterText: { color: '#546E7A', fontWeight: '600', fontSize: 12 },
-  filterTextActive: { color: '#fff' },
-
-  mapContainer: { height: 280, marginHorizontal: 15, marginTop: 15, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#D9E5EF', backgroundColor: '#e0e0e0' },
-  map: { flex: 1 },
-  mapOverlayLabel: { position: 'absolute', bottom: 10, left: 10, backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, flexDirection: 'row', alignItems: 'center', elevation: 2 },
-  mapOverlayText: { fontSize: 12, fontWeight: 'bold', color: '#0D47A1' },
-
-  statsContainer: { flexDirection: 'row', backgroundColor: '#fff', marginHorizontal: 15, marginTop: 15, borderRadius: 12, paddingVertical: 15, borderWidth: 1, borderColor: '#D9E5EF' },
-  statBox: { flex: 1, alignItems: 'center', borderRightWidth: 1, borderRightColor: '#D9E5EF' },
+  statsContainer: { flexDirection: 'row', margin: 15, borderRadius: 12, paddingVertical: 15, borderWidth: 1 },
+  statBox: { flex: 1, alignItems: 'center', borderRightWidth: 1 },
   statValue: { fontSize: 24, fontWeight: '900', marginBottom: 2 },
   statLabelRow: { flexDirection: 'row', alignItems: 'center' },
   statLabel: { fontSize: 11, fontWeight: '600', color: '#546E7A' },
 
-  updatesContainer: { backgroundColor: '#fff', marginHorizontal: 15, marginTop: 15, borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#D9E5EF' },
+  updatesContainer: { marginHorizontal: 15, marginBottom: 15, borderRadius: 12, padding: 15, borderWidth: 1, flex: 0.5 },
   updatesHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  updatesTitle: { fontSize: 15, fontWeight: 'bold', color: '#000' },
+  updatesTitle: { fontSize: 15, fontWeight: 'bold' },
   viewAllText: { fontSize: 12, color: '#1565C0', fontWeight: 'bold' },
-  
   updateItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  animalIconBox: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#F5F8FB', alignItems: 'center', justifyContent: 'center', marginRight: 12, borderWidth: 1, borderColor: '#D9E5EF' },
+  animalIconBox: { width: 40, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12, borderWidth: 1 },
   updateTextCol: { flex: 1 },
-  animalId: { fontSize: 14, fontWeight: 'bold', color: '#000' },
+  animalId: { fontSize: 14, fontWeight: 'bold' },
   animalStatus: { fontSize: 12, color: '#546E7A', marginTop: 2 },
   updateMetaCol: { alignItems: 'flex-end' },
   updateTime: { fontSize: 11, color: '#888', marginBottom: 4 },
 
-  simButton: { position: 'absolute', bottom: 20, right: 20, width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 6, shadowColor: '#000', shadowOffset: {width: 0, height: 3}, shadowOpacity: 0.3, shadowRadius: 4 },
-
-  // Modal exactly like Wireframe
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
-  modalBox: { width: '90%', backgroundColor: '#fff', padding: 20, borderRadius: 20, alignItems: 'center' },
-  modalHeader: { flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  modalHeaderTitle: { fontSize: 16, fontWeight: 'bold', color: '#000' },
-  modalTitle: { fontSize: 20, fontWeight: '900', color: '#000', marginBottom: 8 },
-  modalDesc: { fontSize: 13, textAlign: 'center', color: '#666', marginBottom: 20, lineHeight: 20, paddingHorizontal: 10 },
-  miniMapPlaceholder: { width: '100%', height: 120, backgroundColor: '#E3F2FD', borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#BBDEFB' },
-  btnPrimary: { backgroundColor: '#1565C0', width: '100%', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginBottom: 10 },
-  btnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  btnSecondary: { backgroundColor: '#fff', width: '100%', paddingVertical: 14, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#1565C0' },
-  btnSecondaryText: { color: '#1565C0', fontSize: 14, fontWeight: 'bold' },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 15, borderBottomWidth: 1 },
+  headerTitleContainer: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitle: { fontSize: 20, fontWeight: 'bold' },
+  liveBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#2E7D32', marginRight: 4 },
+  liveText: { fontSize: 10, fontWeight: 'bold', color: '#2E7D32' },
+  mapContainer: { flex: 1, position: 'relative' },
+  map: { flex: 1 },
+  controlsOverlay: { position: 'absolute', top: 15, right: 15 },
+  simButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1565C0', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
+  simButtonActive: { backgroundColor: '#D32F2F' },
+  simButtonText: { color: '#fff', fontWeight: 'bold', marginLeft: 8 },
+  filterContainer: { position: 'absolute', bottom: 20, left: 0, right: 0, paddingHorizontal: 15, flexDirection: 'row' },
+  filterPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginRight: 10, borderWidth: 1 },
+  filterPillActive: { backgroundColor: '#1565C0', borderColor: '#1565C0' },
+  filterText: { fontWeight: '600' },
+  filterTextActive: { color: '#FFFFFF' },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  alertBox: { width: '100%', borderRadius: 16, padding: 24, alignItems: 'center', borderWidth: 1 },
+  alertIconBg: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#FFEBEE', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  alertTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 8, textAlign: 'center' },
+  alertDesc: { fontSize: 14, textAlign: 'center', marginBottom: 24, lineHeight: 20 },
+  alertActions: { flexDirection: 'row', width: '100%', gap: 12 },
+  dismissBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: '#f5f5f5', alignItems: 'center' },
+  dismissText: { color: '#666', fontWeight: '600', fontSize: 15 },
+  dispatchBtn: { flex: 1, flexDirection: 'row', paddingVertical: 12, borderRadius: 8, backgroundColor: '#D32F2F', alignItems: 'center', justifyContent: 'center' },
+  dispatchText: { color: '#fff', fontWeight: 'bold', fontSize: 15 }
 });

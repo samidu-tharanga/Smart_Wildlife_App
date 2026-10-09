@@ -12,6 +12,7 @@ import {
 
 import type { Timestamp } from 'firebase/firestore';
 import { db, auth } from './firebase';
+import { IncidentService } from './incidentService';
 
 export interface RoutePoint {
   latitude: number;
@@ -26,6 +27,7 @@ export interface PatrolAssignmentData {
   approximateDistanceKm: number;
   patrolDate: string;
   estimatedDurationMinutes: number;
+  incidentId?: string;
 }
 
 export interface PatrolAssignment extends PatrolAssignmentData {
@@ -125,6 +127,7 @@ export class PatrolService {
         approximateDistanceKm: data.approximateDistanceKm,
         patrolDate: data.patrolDate,
         estimatedDurationMinutes: data.estimatedDurationMinutes,
+        incidentId: data.incidentId || null,
         status: 'assigned',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -134,6 +137,10 @@ export class PatrolService {
         collection(db, 'patrol_assignments'),
         assignment,
       );
+
+      if (data.incidentId) {
+        await IncidentService.linkIncidentToPatrol(data.incidentId, document.id);
+      }
 
       return document.id;
     } catch (error: unknown) {
@@ -297,6 +304,9 @@ export class PatrolService {
           updatedAt: serverTimestamp(),
         });
       });
+
+      // Synchronize linked incident status to RESOLVED
+      await IncidentService.resolveIncidentIfLinked(id);
     } catch (error: unknown) {
       throw patrolUpdateError(error);
     }

@@ -1,5 +1,6 @@
 import { Picker } from '@react-native-picker/picker';
 import { useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
 import {
   ActivityIndicator,
   ScrollView,
@@ -8,7 +9,11 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Image
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../../context/ThemeContext';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import RoutePickerMap, {
   calculateDistance,
 } from '../../components/patrol/RoutePickerMap';
@@ -29,7 +34,16 @@ function isValidDate(value: string): boolean {
   );
 }
 
+const bannerImage = require('../../assets/banner.jpg');
+
 export default function AssignScreen() {
+  const params = useLocalSearchParams<{
+    incidentId?: string;
+    incidentType?: string;
+    latitude?: string;
+    longitude?: string;
+  }>();
+  const { theme, isDarkMode, toggleTheme } = useTheme();
   const [points, setPoints] = useState<RoutePoint[]>([]);
   const [routeName, setRouteName] = useState('');
   const [rangerUid, setRangerUid] = useState('');
@@ -44,6 +58,31 @@ export default function AssignScreen() {
   const [reloadRangers, setReloadRangers] = useState(0);
   const [mapKey, setMapKey] = useState(0);
   const submitting = useRef(false);
+
+  useEffect(() => {
+    if (params.incidentType && !routeName) {
+      const typeLabel = params.incidentType.replace(/_/g, ' ').toUpperCase();
+      setRouteName('Investigate ' + typeLabel);
+    }
+
+    if (params.latitude && params.longitude && points.length === 0) {
+      const lat = parseFloat(params.latitude);
+      const lng = parseFloat(params.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const offset = 0.005;
+        setPoints([
+          { latitude: lat, longitude: lng, type: 'start' },
+          { latitude: lat + offset, longitude: lng + offset, type: 'end' },
+        ]);
+        setMapKey((k) => k + 1);
+      }
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (!patrolDate) {
+      setPatrolDate(todayStr);
+    }
+  }, [params.incidentId, params.incidentType, params.latitude, params.longitude]);
 
   useEffect(() => {
     let active = true;
@@ -145,6 +184,7 @@ export default function AssignScreen() {
         approximateDistanceKm: calculateDistance(points),
         patrolDate: date,
         estimatedDurationMinutes: minutes,
+        incidentId: params.incidentId,
       });
 
       setSuccess(`"${name}" assigned successfully.`);
@@ -169,15 +209,33 @@ export default function AssignScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text style={styles.title}>Plan a patrol</Text>
-      <Text style={styles.subtitle}>
-        Choose points on the map, then assign a ranger.
-      </Text>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]} edges={['top']}>
+      <ScrollView
+        style={[styles.screen, { backgroundColor: theme.cardBg }]}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.bannerContainer}>
+          <Image source={bannerImage} style={styles.bannerImage} resizeMode="cover" />
+          <View style={styles.bannerOverlay}>
+            <View style={styles.headerIcon}>
+              <Ionicons name="person-add-outline" size={26} color="#FFFFFF" />
+            </View>
+            <View style={styles.headerCopy}>
+              <Text style={styles.headerEyebrow}>ROSTER CONTROLS � MANAGER</Text>
+              <Text style={styles.headerTitle}>Assign Patrols</Text>
+              <Text style={styles.headerSubtitle}>Create and dispatch ranger patrols</Text>
+            </View>
+            <TouchableOpacity style={styles.darkToggleBtn} onPress={toggleTheme} activeOpacity={0.8}>
+              <Ionicons name={isDarkMode ? "sunny" : "moon"} size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        <Text style={[styles.title, { color: theme.textPrimary }]}>Plan a patrol</Text>
+        <Text style={styles.subtitle}>
+          Choose points on the map, then assign a ranger.
+        </Text>
 
       <View pointerEvents={loading ? 'none' : 'auto'}>
         <RoutePickerMap
@@ -187,9 +245,9 @@ export default function AssignScreen() {
         />
       </View>
 
-      <Text style={styles.label}>Route name</Text>
+      <Text style={[styles.label, { color: theme.textPrimary }]}>Route name</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { borderColor: theme.inputBorder, backgroundColor: theme.inputBg, color: theme.inputText }]}
         placeholder="Northern Trail"
         placeholderTextColor="#78909C"
         value={routeName}
@@ -197,7 +255,7 @@ export default function AssignScreen() {
         editable={!loading}
       />
 
-      <Text style={styles.label}>Assign ranger</Text>
+      <Text style={[styles.label, { color: theme.textPrimary }]}>Assign ranger</Text>
 
       {fetchingRangers ? (
         <View style={styles.loadingBox}>
@@ -219,12 +277,12 @@ export default function AssignScreen() {
           No ranger accounts found.
         </Text>
       ) : (
-        <View style={styles.pickerContainer}>
+        <View style={[styles.pickerContainer, { borderColor: theme.inputBorder, backgroundColor: theme.inputBg }]}>
           <Picker
             selectedValue={rangerUid}
             enabled={!loading}
             onValueChange={(value: string) => setRangerUid(value)}
-            style={styles.picker}
+            style={[styles.picker, { color: theme.inputText, backgroundColor: theme.inputBg }]}
           >
             <Picker.Item label="Select a ranger" value="" />
             {rangers.map((ranger) => (
@@ -238,9 +296,9 @@ export default function AssignScreen() {
         </View>
       )}
 
-      <Text style={styles.label}>Patrol date</Text>
+      <Text style={[styles.label, { color: theme.textPrimary }]}>Patrol date</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { borderColor: theme.inputBorder, backgroundColor: theme.inputBg, color: theme.inputText }]}
         placeholder="YYYY-MM-DD"
         placeholderTextColor="#78909C"
         value={patrolDate}
@@ -251,9 +309,9 @@ export default function AssignScreen() {
         maxLength={10}
       />
 
-      <Text style={styles.label}>Estimated duration (minutes)</Text>
+      <Text style={[styles.label, { color: theme.textPrimary }]}>Estimated duration (minutes)</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, { borderColor: theme.inputBorder, backgroundColor: theme.inputBg, color: theme.inputText }]}
         placeholder="120"
         placeholderTextColor="#78909C"
         value={duration}
@@ -298,10 +356,22 @@ export default function AssignScreen() {
         )}
       </TouchableOpacity>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#F8F9FA' },
+  bannerContainer: { width: '100%', height: 160, borderRadius: 16, overflow: 'hidden', marginBottom: 20, elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 6 },
+  bannerImage: { width: '100%', height: '100%', position: 'absolute' },
+  bannerOverlay: { flex: 1, backgroundColor: 'rgba(13, 71, 161, 0.75)', padding: 18, flexDirection: 'row', alignItems: 'center' },
+  headerIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 15 },
+  headerCopy: { flex: 1, justifyContent: 'center' },
+  headerEyebrow: { color: '#BBDEFB', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  headerTitle: { color: '#FFFFFF', fontSize: 24, fontWeight: '800', marginTop: 4, textShadowColor: 'rgba(0,0,0,0.2)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
+  headerSubtitle: { color: '#E3F2FD', fontSize: 13, marginTop: 4, fontWeight: '500' },
+  darkToggleBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+
   screen: {
     flex: 1,
     backgroundColor: '#FFFFFF',
@@ -401,3 +471,10 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
+
+
+
+
+
+
+
