@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, Alert, ScrollView, Image } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { DangerZone, subscribeToDangerZones, LatLng } from '../../services/dangerZoneService';
 import { Animal, subscribeToAnimals } from '../../services/animalService';
+import { DangerZone, LatLng, subscribeToDangerZones } from '../../services/dangerZoneService';
 import { IncidentService } from '../../services/incidentService';
 
 export default function TrackingScreen() {
@@ -19,6 +19,7 @@ export default function TrackingScreen() {
   
   const [dangerZones, setDangerZones] = useState<DangerZone[]>([]);
   const [animals, setAnimals] = useState<Animal[]>([]);
+  const [initialPositions, setInitialPositions] = useState<Record<string, { lat: number; lng: number }>>({});
   
   // To keep track of current dynamic positions
   const positionsRef = useRef<Record<string, {lat: number, lng: number}>>({});
@@ -35,24 +36,25 @@ export default function TrackingScreen() {
         }
       });
       positionsRef.current = newPos;
+      setInitialPositions(newPos);
     });
 
     return () => { unsubZones(); unsubAnimals(); };
   }, []);
 
   const isPointInPolygon = (point: LatLng, vs: LatLng[]) => {
-    let x = point.lng, y = point.lat;
+    const x = point.lng, y = point.lat;
     let inside = false;
     for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
-      let xi = vs[i].lng, yi = vs[i].lat;
-      let xj = vs[j].lng, yj = vs[j].lat;
-      let intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      const xi = vs[i].lng, yi = vs[i].lat;
+      const xj = vs[j].lng, yj = vs[j].lat;
+      const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
       if (intersect) inside = !inside;
     }
     return inside;
   };
 
-  const checkDangerZone = async (animal: Animal, lat: number, lng: number) => {
+  const checkDangerZone = useCallback(async (animal: Animal, lat: number, lng: number) => {
     for (const zone of dangerZones) {
       if (isPointInPolygon({ lat, lng }, zone.points)) {
         if (!showAlert) {
@@ -70,7 +72,7 @@ export default function TrackingScreen() {
       }
     }
     return false;
-  };
+  }, [dangerZones, showAlert]);
 
   useEffect(() => {
     let timer: any;
@@ -117,7 +119,7 @@ export default function TrackingScreen() {
       }, 3000);
     }
     return () => clearInterval(timer);
-  }, [isSimulating, animals, dangerZones, showAlert]);
+  }, [isSimulating, animals, checkDangerZone]);
 
   const toggleSimulation = () => {
     if (!isSimulating && showAlert) setShowAlert(false);
@@ -156,7 +158,7 @@ export default function TrackingScreen() {
 
             var markers = {};
             var animals = ${JSON.stringify(animals)};
-            var initialPositions = ${JSON.stringify(positionsRef.current)};
+            var initialPositions = ${JSON.stringify(initialPositions)};
             
             function getAnimalEmoji(species) {
                 const s = species.toLowerCase();
@@ -328,6 +330,7 @@ export default function TrackingScreen() {
                     await IncidentService.submitIncident({
                         type: currentBreach.species + ' breach',
                         description: currentBreach.species + ' breached ' + currentBreach.zone,
+                      photoUri: null,
                         latitude: currentBreach.lat || 0,
                         longitude: currentBreach.lng || 0
                     });
