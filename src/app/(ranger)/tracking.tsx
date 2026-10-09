@@ -6,7 +6,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { DangerZone, subscribeToDangerZones, LatLng } from '../../services/dangerZoneService';
 import { Animal, subscribeToAnimals } from '../../services/animalService';
-import { logIncident } from '../../services/incidentService';
+import { IncidentService } from '../../services/incidentService';
 
 export default function TrackingScreen() {
   const { theme } = useTheme();
@@ -325,10 +325,11 @@ export default function TrackingScreen() {
               </TouchableOpacity>
               <TouchableOpacity style={styles.dispatchBtn} onPress={async () => {
                 if (currentBreach) {
-                    await logIncident({
-                        ...currentBreach,
-                        time: new Date().toLocaleTimeString(),
-                        timestamp: Date.now()
+                    await IncidentService.submitIncident({
+                        type: currentBreach.species + ' breach',
+                        description: currentBreach.species + ' breached ' + currentBreach.zone,
+                        latitude: currentBreach.lat || 0,
+                        longitude: currentBreach.lng || 0
                     });
                     Alert.alert("Success", "Manager has been notified!");
                     setShowAlert(false);
