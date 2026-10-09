@@ -47,6 +47,22 @@ export interface Hotspot {
   incidents: number;
 }
 
+export interface ThreatAssessment {
+  score: number;
+  level: 'Low' | 'Moderate' | 'High' | 'Critical';
+  color: string;
+  summary: string;
+  factors: { label: string; impact: 'Low' | 'Medium' | 'High'; description: string }[];
+}
+
+export interface Recommendation {
+  id: string;
+  priority: 'Urgent' | 'High' | 'Normal';
+  title: string;
+  description: string;
+  actionText: string;
+}
+
 export interface ConservationReport {
   kind: ReportKind;
   startDate: Date;
@@ -55,6 +71,8 @@ export interface ConservationReport {
   sourceResults: ReportSources;
   partialData: boolean;
   totalAvailableRecords: number;
+  threatAssessment: ThreatAssessment;
+  recommendations: Recommendation[];
   incidents: {
     total: number;
     categories: ReportCount[];
@@ -208,6 +226,124 @@ export function buildConservationReport(
   });
 
   const candidateIncidents = incidents.filter((record) => isPoachingCandidate(record.category));
+  const hotspots = findPotentialHotspots(incidents);
+  const patrolCompletionPercent = patrols.length > 0 ? Math.round((completedPatrols / patrols.length) * 100) : null;
+
+  // Calculate Threat Assessment
+  let threatScore = 15;
+  const threatFactors: { label: string; impact: 'Low' | 'Medium' | 'High'; description: string }[] = [];
+
+  if (candidateIncidents.length > 0 || hotspots.length > 0) {
+    const pScore = Math.min(45, candidateIncidents.length * 8 + hotspots.length * 10);
+    threatScore += pScore;
+    threatFactors.push({
+      label: 'Poaching Activity',
+      impact: pScore > 25 ? 'High' : 'Medium',
+      description: `${candidateIncidents.length} poaching candidate report(s) and ${hotspots.length} hotspot cluster(s) detected.`,
+    });
+  } else {
+    threatFactors.push({
+      label: 'Poaching Activity',
+      impact: 'Low',
+      description: 'No active poaching incidents or snare clusters detected.',
+    });
+  }
+
+  if (conflicts.length > 0) {
+    const cScore = Math.min(25, conflicts.length * 6);
+    threatScore += cScore;
+    threatFactors.push({
+      label: 'Human-Wildlife Conflict',
+      impact: conflicts.length > 3 ? 'High' : 'Medium',
+      description: `${conflicts.length} conflict report(s) recorded along boundary buffer.`,
+    });
+  }
+
+  if (patrols.length > 0 && patrolCompletionPercent !== null && patrolCompletionPercent < 60) {
+    const deficit = Math.round((60 - patrolCompletionPercent) * 0.4);
+    threatScore += deficit;
+    threatFactors.push({
+      label: 'Patrol Coverage Deficit',
+      impact: 'Medium',
+      description: `Patrol completion is ${patrolCompletionPercent}% (target is 60%+).`,
+    });
+  }
+
+  threatScore = Math.min(100, Math.max(0, threatScore));
+  let threatLevel: 'Low' | 'Moderate' | 'High' | 'Critical' = 'Low';
+  let threatColor = '#2E7D32';
+  let threatSummary = 'Conservation zone is stable. Standard routine surveillance recommended.';
+
+  if (threatScore >= 70) {
+    threatLevel = 'Critical';
+    threatColor = '#B71C1C';
+    threatSummary = 'Critical alert: Multiple concurrent threats detected. Deploy rapid response units.';
+  } else if (threatScore >= 45) {
+    threatLevel = 'High';
+    threatColor = '#D32F2F';
+    threatSummary = 'Elevated threat: Active incident clusters detected. Increase targeted patrol sweeps.';
+  } else if (threatScore >= 25) {
+    threatLevel = 'Moderate';
+    threatColor = '#F57F17';
+    threatSummary = 'Moderate threat: Boundary interactions detected. Enhance ranger vigilance.';
+  }
+
+  const threatAssessment: ThreatAssessment = {
+    score: threatScore,
+    level: threatLevel,
+    color: threatColor,
+    summary: threatSummary,
+    factors: threatFactors,
+  };
+
+  // Generate Recommendations
+  const recommendations: Recommendation[] = [];
+  if (hotspots.length > 0) {
+    recommendations.push({
+      id: 'rec_hotspots',
+      priority: 'Urgent',
+      title: 'Targeted Anti-Poaching Sweeps',
+      description: `Deploy snare-removal units to hotspot coordinates around [${hotspots[0].label}].`,
+      actionText: 'Assign Sweep Route',
+    });
+  }
+  if (patrolCompletionPercent !== null && patrolCompletionPercent < 70 && patrols.length > 0) {
+    recommendations.push({
+      id: 'rec_patrols',
+      priority: 'High',
+      title: 'Patrol Route Reallocation',
+      description: `Rangers achieved ${patrolCompletionPercent}% route completion. Review assignments to increase coverage.`,
+      actionText: 'Review Allocations',
+    });
+  }
+  if (conflicts.length > 0) {
+    recommendations.push({
+      id: 'rec_conflicts',
+      priority: 'High',
+      title: 'Boundary Buffer Verification',
+      description: `${conflicts.length} community conflict report(s) logged. Verify perimeter deterrents and community alerts.`,
+      actionText: 'Inspect Boundaries',
+    });
+  }
+  if (incidents.filter((r) => r.latitude === null || r.longitude === null).length > 0) {
+    const missingLocs = incidents.filter((r) => r.latitude === null || r.longitude === null).length;
+    recommendations.push({
+      id: 'rec_gps',
+      priority: 'Normal',
+      title: 'Enforce Ranger GPS Logging',
+      description: `${missingLocs} incident report(s) lack GPS coordinates, preventing cluster analysis.`,
+      actionText: 'Update Protocol',
+    });
+  }
+  if (recommendations.length === 0) {
+    recommendations.push({
+      id: 'rec_maintain',
+      priority: 'Normal',
+      title: 'Maintain Baseline Patrol Regimen',
+      description: 'Incident activity is within seasonal thresholds. Continue routine perimeter and wildlife monitoring.',
+      actionText: 'Continue Monitoring',
+    });
+  }
 
   return {
     kind,
@@ -217,6 +353,8 @@ export function buildConservationReport(
     sourceResults: sources,
     partialData,
     totalAvailableRecords,
+    threatAssessment,
+    recommendations,
     incidents: {
       total: incidents.length,
       categories: countBy(incidents.map((record) => record.category)),
@@ -225,7 +363,7 @@ export function buildConservationReport(
     },
     poaching: {
       candidateIncidentCount: candidateIncidents.length,
-      hotspots: findPotentialHotspots(incidents),
+      hotspots,
       candidateIncidentsWithoutLocation: candidateIncidents.filter((record) => record.latitude === null || record.longitude === null).length,
     },
     patrols: {
@@ -233,7 +371,7 @@ export function buildConservationReport(
       completed: completedPatrols,
       inProgress: inProgressPatrols,
       notStarted: patrols.filter((patrol) => patrol.status.toLowerCase() === 'assigned').length,
-      completionPercent: patrols.length > 0 ? Math.round((completedPatrols / patrols.length) * 100) : null,
+      completionPercent: patrolCompletionPercent,
       plannedDistanceKm: Math.round(patrols.reduce((total, patrol) => total + (patrol.approximateDistanceKm ?? 0), 0) * 10) / 10,
       routeProgress: [...routeTotals.entries()]
         .map(([routeName, counts]) => ({ routeName, ...counts }))
