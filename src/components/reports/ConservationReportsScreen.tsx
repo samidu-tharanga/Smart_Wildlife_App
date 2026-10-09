@@ -13,12 +13,16 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 import { useTheme } from '../../context/ThemeContext';
 import {
   ConservationReport,
+  Hotspot,
+  Recommendation,
   REPORT_DEFINITIONS,
   ReportKind,
-  SourceResult,
+  ReportSource,
+  ThreatAssessment,
 } from '../../services/reportAnalytics';
 import {
   generateConservationReport,
@@ -114,6 +118,10 @@ function buildReportCsv(report: ConservationReport): string {
       source,
       `${report.sourceResults[source].state}: ${report.sourceResults[source].records.length} records${report.sourceResults[source].error ? ` (${report.sourceResults[source].error})` : ''}`,
     ]),
+    ['Intelligence', 'Threat Level', report.threatAssessment.level],
+    ['Intelligence', 'Threat Score', `${report.threatAssessment.score}/100`],
+    ['Intelligence', 'Assessment Summary', report.threatAssessment.summary],
+    ...report.recommendations.map((rec) => ['Recommendation', `[${rec.priority}] ${rec.title}`, rec.description]),
   ];
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
 }
@@ -187,6 +195,65 @@ function SourceStateRow({ source, label, theme }: { source: SourceResult<any>; l
   );
 }
 
+function HotspotMapView({ hotspots, textColor }: { hotspots: Hotspot[]; textColor: string }) {
+  if (hotspots.length === 0) {
+    return (
+      <View style={styles.mapEmptyState}>
+        <Ionicons name="map-outline" size={24} color={COLORS.slate} />
+        <Text style={[styles.mapEmptyText, { color: textColor }]}>No located incident clusters available to map.</Text>
+      </View>
+    );
+  }
+
+  const centerLat = hotspots[0].latitude;
+  const centerLng = hotspots[0].longitude;
+
+  const markersScript = hotspots
+    .map(
+      (h, idx) => `
+      var circle = L.circle([${h.latitude}, ${h.longitude}], {
+        color: '#D32F2F',
+        fillColor: '#EF5350',
+        fillOpacity: 0.45,
+        radius: 350
+      }).addTo(map);
+      circle.bindPopup("<b>Hotspot #${idx + 1}</b><br/>${h.incidents} candidate reports<br/>Coords: ${h.label}");
+      var marker = L.marker([${h.latitude}, ${h.longitude}]).addTo(map);
+      marker.bindPopup("<b>Hotspot #${idx + 1}</b><br/>${h.incidents} candidate reports");
+      if (${idx === 0}) { circle.openPopup(); }
+    `
+    )
+    .join('\n');
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+      <style>
+        body, html, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #e0e8ef; }
+      </style>
+    </head>
+    <body>
+      <div id="map"></div>
+      <script>
+        var map = L.map('map', { zoomControl: false }).setView([${centerLat}, ${centerLng}], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        ${markersScript}
+      </script>
+    </body>
+    </html>
+  `;
+
+  return (
+    <View style={styles.mapWrapper}>
+      <WebView source={{ html }} style={styles.hotspotMap} scrollEnabled={false} />
+    </View>
+  );
+}
+
 function ResultPanel({
   report,
   kind,
@@ -196,6 +263,7 @@ function ResultPanel({
   kind: ReportKind;
   theme: ReturnType<typeof useTheme>['theme'];
 }) {
+  const [hotspotView, setHotspotView] = useState<'list' | 'map'>('list');
   const showAll = kind === 'overview';
   const showIncidents = showAll || kind === 'incidents';
   const showPoaching = showAll || kind === 'poaching';
@@ -216,6 +284,69 @@ function ResultPanel({
         <View style={styles.generatedMark}>
           <Ionicons name="checkmark-circle" size={17} color={COLORS.green} />
           <Text style={styles.generatedText}>Generated</Text>
+        </View>
+      </View>
+
+      {/* Executive Threat Level & Risk Index Card */}
+      <View style={[styles.sectionCard, { backgroundColor: theme.cardBg }]}>
+        <View style={styles.threatHeader}>
+          <View style={[styles.threatBadge, { backgroundColor: report.threatAssessment.color }]}>
+            <Ionicons name="shield-checkmark" size={13} color={COLORS.white} />
+            <Text style={styles.threatBadgeText}>{report.threatAssessment.level.toUpperCase()} THREAT</Text>
+          </View>
+          <Text style={[styles.threatScoreText, { color: report.threatAssessment.color }]}>
+            Threat Index: {report.threatAssessment.score}/100
+          </Text>
+        </View>
+        <View style={styles.threatMeterTrack}>
+          <View
+            style={[
+              styles.threatMeterFill,
+              { width: `${report.threatAssessment.score}%`, backgroundColor: report.threatAssessment.color },
+            ]}
+          />
+        </View>
+        <Text style={[styles.threatSummary, { color: theme.textPrimary }]}>
+          {report.threatAssessment.summary}
+        </Text>
+        <View style={styles.threatFactorsList}>
+          {report.threatAssessment.factors.map((factor) => (
+            <View key={factor.label} style={styles.factorItem}>
+              <View style={styles.factorHeader}>
+                <Text style={[styles.factorLabel, { color: theme.textPrimary }]}>{factor.label}</Text>
+                <View
+                  style={[
+                    styles.impactPill,
+                    {
+                      backgroundColor:
+                        factor.impact === 'High'
+                          ? '#FFEBEE'
+                          : factor.impact === 'Medium'
+                          ? '#FFF8E1'
+                          : '#E8F5E9',
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.impactText,
+                      {
+                        color:
+                          factor.impact === 'High'
+                            ? COLORS.red
+                            : factor.impact === 'Medium'
+                            ? COLORS.yellow
+                            : COLORS.green,
+                      },
+                    ]}
+                  >
+                    {factor.impact}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[styles.factorDesc, { color: theme.textSecondary }]}>{factor.description}</Text>
+            </View>
+          ))}
         </View>
       </View>
 
@@ -265,13 +396,43 @@ function ResultPanel({
           {report.poaching.candidateIncidentsWithoutLocation > 0 && (
             <Text style={styles.warningText}>{report.poaching.candidateIncidentsWithoutLocation} candidate report(s) have no coordinates and were excluded from clusters.</Text>
           )}
-          {report.poaching.hotspots.length ? report.poaching.hotspots.map((hotspot) => (
-            <View key={hotspot.label} style={styles.hotspotRow}>
-              <Ionicons name="location" size={18} color={COLORS.red} />
-              <Text style={[styles.areaName, { color: theme.textPrimary }]}>{hotspot.label}</Text>
-              <Text style={[styles.areaCount, { color: theme.textSecondary }]}>{hotspot.incidents} reports</Text>
+
+          {report.poaching.hotspots.length > 0 && (
+            <View style={styles.hotspotViewToggle}>
+              <TouchableOpacity
+                onPress={() => setHotspotView('list')}
+                style={[styles.toggleBtn, hotspotView === 'list' && styles.toggleBtnActive]}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="list" size={13} color={hotspotView === 'list' ? COLORS.white : COLORS.slate} />
+                <Text style={[styles.toggleBtnText, hotspotView === 'list' && styles.toggleBtnTextActive]}>List view</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setHotspotView('map')}
+                style={[styles.toggleBtn, hotspotView === 'map' && styles.toggleBtnActive]}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="map" size={13} color={hotspotView === 'map' ? COLORS.white : COLORS.slate} />
+                <Text style={[styles.toggleBtnText, hotspotView === 'map' && styles.toggleBtnTextActive]}>Cluster Map</Text>
+              </TouchableOpacity>
             </View>
-          )) : <Text style={[styles.noBreakdown, { color: theme.textSecondary }]}>No potential clusters were found in the available incident locations.</Text>}
+          )}
+
+          {report.poaching.hotspots.length ? (
+            hotspotView === 'map' ? (
+              <HotspotMapView hotspots={report.poaching.hotspots} textColor={theme.textSecondary} />
+            ) : (
+              report.poaching.hotspots.map((hotspot) => (
+                <View key={hotspot.label} style={styles.hotspotRow}>
+                  <Ionicons name="location" size={18} color={COLORS.red} />
+                  <Text style={[styles.areaName, { color: theme.textPrimary }]}>{hotspot.label}</Text>
+                  <Text style={[styles.areaCount, { color: theme.textSecondary }]}>{hotspot.incidents} reports</Text>
+                </View>
+              ))
+            )
+          ) : (
+            <Text style={[styles.noBreakdown, { color: theme.textSecondary }]}>No potential clusters were found in the available incident locations.</Text>
+          )}
         </View>
       )}
 
@@ -310,6 +471,44 @@ function ResultPanel({
       {kind === 'incidents' && report.sourceResults.incidents.state !== 'available' && <SourceUnavailable text="Incident data is unavailable for this period." />}
       {kind === 'poaching' && report.sourceResults.incidents.state !== 'available' && <SourceUnavailable text="Incident location data is unavailable for hotspot analysis." />}
       {kind === 'conflicts' && report.sourceResults.conflicts.state !== 'available' && <SourceUnavailable text="Community reports are not connected yet, so conflict trends cannot be calculated." />}
+
+      {/* Automated Decision-Support Recommendations */}
+      <View style={[styles.sectionCard, { backgroundColor: theme.cardBg }]}>
+        <View style={styles.recCardHeader}>
+          <Ionicons name="bulb-outline" size={19} color={COLORS.primary} />
+          <Text style={[styles.cardTitle, { color: theme.textPrimary }]}>Actionable recommendations</Text>
+        </View>
+        <Text style={[styles.cardSubtitle, { color: theme.textSecondary }]}>
+          Rule-based operational guidance synthesized from current incident clusters and patrol records.
+        </Text>
+        <View style={styles.recList}>
+          {report.recommendations.map((rec) => {
+            const isUrgent = rec.priority === 'Urgent';
+            const isHigh = rec.priority === 'High';
+            const badgeColor = isUrgent ? COLORS.red : isHigh ? COLORS.yellow : COLORS.primary;
+            const badgeBg = isUrgent ? '#FFEBEE' : isHigh ? '#FFF8E1' : COLORS.lightBlue;
+            return (
+              <View key={rec.id} style={styles.recItem}>
+                <View style={styles.recTopRow}>
+                  <View style={[styles.recPriorityBadge, { backgroundColor: badgeBg }]}>
+                    <Text style={[styles.recPriorityText, { color: badgeColor }]}>{rec.priority.toUpperCase()}</Text>
+                  </View>
+                  <Text style={[styles.recTitle, { color: theme.textPrimary }]} numberOfLines={1}>
+                    {rec.title}
+                  </Text>
+                </View>
+                <Text style={[styles.recDescription, { color: theme.textSecondary }]}>
+                  {rec.description}
+                </Text>
+                <View style={styles.recActionPill}>
+                  <Ionicons name="shield-outline" size={13} color={COLORS.primary} />
+                  <Text style={styles.recActionText}>{rec.actionText}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
 
       <Text style={[styles.generatedAt, { color: theme.textSecondary }]}>Generated {formatDate(report.generatedAt)}</Text>
     </View>
@@ -805,4 +1004,37 @@ const styles = StyleSheet.create({
   shareText: { color: COLORS.primary, fontSize: 12, fontWeight: '700' },
   backButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 6, backgroundColor: COLORS.lightBlue },
   backText: { color: COLORS.darkBlue, fontSize: 12, fontWeight: '700' },
+  threatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  threatBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 12 },
+  threatBadgeText: { color: COLORS.white, fontSize: 10, fontWeight: '800' },
+  threatScoreText: { fontSize: 13, fontWeight: '700' },
+  threatMeterTrack: { width: '100%', height: 6, borderRadius: 3, backgroundColor: '#E0E8F0', overflow: 'hidden' },
+  threatMeterFill: { height: '100%', borderRadius: 3 },
+  threatSummary: { fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  threatFactorsList: { gap: 8, marginTop: 4, borderTopWidth: 1, borderTopColor: '#EDF2F7', paddingTop: 8 },
+  factorItem: { gap: 3 },
+  factorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  factorLabel: { fontSize: 11, fontWeight: '700' },
+  impactPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
+  impactText: { fontSize: 9, fontWeight: '800' },
+  factorDesc: { fontSize: 10, lineHeight: 14 },
+  hotspotViewToggle: { flexDirection: 'row', gap: 6, alignSelf: 'flex-start', marginVertical: 6 },
+  toggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: '#EDF2F7' },
+  toggleBtnActive: { backgroundColor: COLORS.primary },
+  toggleBtnText: { fontSize: 11, fontWeight: '600', color: COLORS.slate },
+  toggleBtnTextActive: { color: COLORS.white },
+  mapWrapper: { height: 210, width: '100%', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginVertical: 6 },
+  hotspotMap: { flex: 1 },
+  mapEmptyState: { height: 110, alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: COLORS.border, borderRadius: 6 },
+  mapEmptyText: { fontSize: 11 },
+  recCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  recList: { gap: 10, marginTop: 6 },
+  recItem: { borderRadius: 6, borderWidth: 1, borderColor: '#EDF2F7', padding: 10, gap: 5, backgroundColor: 'rgba(21, 101, 192, 0.02)' },
+  recTopRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  recPriorityBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  recPriorityText: { fontSize: 9, fontWeight: '800' },
+  recTitle: { flex: 1, fontSize: 12, fontWeight: '700' },
+  recDescription: { fontSize: 11, lineHeight: 16 },
+  recActionPill: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, backgroundColor: COLORS.lightBlue },
+  recActionText: { color: COLORS.primary, fontSize: 10, fontWeight: '700' },
 });
