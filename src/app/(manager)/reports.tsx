@@ -1,2 +1,5 @@
-import { View, Text } from 'react-native';
-export default function reportsScreen() { return <View><Text>reports Screen</Text></View> }
+import { ConservationReportsScreen } from '../../components/reports/ConservationReportsScreen';
+
+export default function ManagerReportsScreen() {
+	return <ConservationReportsScreen audience="Park manager" />;
+}

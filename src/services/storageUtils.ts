@@ -3,9 +3,29 @@ import { auth, storage } from './firebase';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 
 /**
+ * Converts a local file URI (file://... or content://...) to a Base64 Data URL.
+ * Ensures images can be displayed across all devices even if Firebase Storage is offline or unavailable.
+ */
+export async function convertUriToBase64(uri: string): Promise<string> {
+  if (!uri) return '';
+  if (uri.startsWith('data:image') || uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri;
+  }
+  try {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return `data:image/jpeg;base64,${base64}`;
+  } catch (err) {
+    console.warn('Failed to convert image URI to Base64:', err);
+    return uri;
+  }
+}
+
+/**
  * Uploads a local image file URI (file://...) to Firebase Storage.
- * Uses Native FileSystem binary upload via Firebase REST API.
- * Automatically tries both `.firebasestorage.app` and `.appspot.com` bucket domains if a 404 occurs.
+ * Uses Native FileSystem binary upload via Firebase REST API with SDK fallback,
+ * and converts to Base64 Data URI if Firebase Storage is unavailable.
  */
 export async function uploadImageToStorage(uri: string, path: string): Promise<string> {
   const user = auth.currentUser;
@@ -59,47 +79,37 @@ export async function uploadImageToStorage(uri: string, path: string): Promise<s
       return downloadUrl;
     }
 
-    if (response.status === 404) {
-      throw new Error(
-        "Firebase Storage bucket not found (404). Please ensure Firebase Storage is enabled in your Firebase Console (Build > Storage > Get Started)."
-      );
-    }
-
     console.warn(`Native upload failed with status ${response.status}: ${response.body}, trying SDK fallback...`);
   } catch (nativeError: any) {
-    if (nativeError.message?.includes('Firebase Storage bucket not found')) {
-      throw nativeError;
-    }
     console.warn('Native FileSystem upload error, trying SDK fallback...', nativeError);
   }
 
-  // SDK Fallback using XMLHttpRequest Blob
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.onload = () => resolve(xhr.response);
-    xhr.onerror = () => reject(new TypeError('Network request failed'));
-    xhr.responseType = 'blob';
-    xhr.open('GET', uri, true);
-    xhr.send(null);
-  });
-
+  // SDK Fallback using fetch to convert local URI to Blob
   try {
-    const storageRef = ref(storage, path);
-    const uploadTask = uploadBytesResumable(storageRef, blob);
+    const fetchResponse = await fetch(uri);
+    const blob = await fetchResponse.blob();
 
-    await new Promise<void>((resolve, reject) => {
-      uploadTask.on(
-        'state_changed',
-        null,
-        (error) => reject(error),
-        () => resolve()
-      );
-    });
+    try {
+      const storageRef = ref(storage, path);
+      const uploadTask = uploadBytesResumable(storageRef, blob);
 
-    return await getDownloadURL(storageRef);
-  } finally {
-    if (blob && typeof (blob as any).close === 'function') {
-      (blob as any).close();
+      await new Promise<void>((resolve, reject) => {
+        uploadTask.on(
+          'state_changed',
+          null,
+          (error) => reject(error),
+          () => resolve()
+        );
+      });
+
+      return await getDownloadURL(storageRef);
+    } finally {
+      if (blob && typeof (blob as any).close === 'function') {
+        (blob as any).close();
+      }
     }
+  } catch (sdkError: any) {
+    console.warn('Firebase Storage SDK upload failed, falling back to Base64 image data:', sdkError.message);
+    return await convertUriToBase64(uri);
   }
 }

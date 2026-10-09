@@ -1,11 +1,17 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { AppTheme } from '../../theme';
 import { auth } from '../../services/firebase';
 import { useTheme } from '../../context/ThemeContext';
+import { SyncService, SyncStatus } from '../../services/syncService';
+import { useRangerIncidents } from '../../hooks/useRangerIncidents';
+import { IncidentCard } from '../../components/incident/IncidentCard';
+import { LocationService } from '../../services/locationService';
+import { updateRangerLocation } from '../../services/rangerService';
 
 const bannerImage = require('../../assets/banner.jpg');
 
@@ -13,6 +19,20 @@ export default function RangerDashboard() {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string>('Ranger');
   const { isDarkMode, toggleTheme, theme } = useTheme();
+
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('IDLE');
+  const [pendingCount, setPendingCount] = useState(0);
+  const { incidents, loading: incidentsLoading } = useRangerIncidents();
+  const recentIncidents = incidents.slice(0, 3);
+
+  useEffect(() => {
+    SyncService.init();
+    const unsubscribe = SyncService.subscribe((status, count) => {
+      setSyncStatus(status);
+      setPendingCount(count);
+    });
+    return unsubscribe;
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -24,8 +44,25 @@ export default function RangerDashboard() {
     }, [])
   );
 
+  const handleSOS = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        Alert.alert('Error', 'Not logged in!');
+        return;
+      }
+
+      const loc = await LocationService.getCurrentLocationAsync();
+      await updateRangerLocation(user.uid, user.displayName || 'Ranger', loc.latitude, loc.longitude, true);
+      Alert.alert('SOS Sent!', 'Your emergency alert & location have been sent to headquarters.');
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Error', 'Failed to send SOS: ' + (e.message || e));
+    }
+  };
+
   const handleReportIncident = () => {
-    router.push('/(ranger)/incident');
+    router.push('/(ranger)/incident?reset=true');
   };
 
   return (
@@ -92,6 +129,56 @@ export default function RangerDashboard() {
             </TouchableOpacity>
           </View>
 
+          {/* Sync Status Banner */}
+          {syncStatus !== 'IDLE' && (
+            <View style={[
+              styles.syncBanner, 
+              syncStatus === 'SUCCESS' ? styles.syncSuccess : styles.syncWarning,
+              isDarkMode && syncStatus !== 'SUCCESS' ? { backgroundColor: 'rgba(245, 158, 11, 0.2)', borderColor: '#F59E0B' } : {},
+              isDarkMode && syncStatus === 'SUCCESS' ? { backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: '#10B981' } : {}
+            ]}>
+              <Ionicons 
+                name={syncStatus === 'SUCCESS' ? 'checkmark-circle' : syncStatus === 'SYNCING' ? 'sync' : 'warning'} 
+                size={20} 
+                color={syncStatus === 'SUCCESS' ? (isDarkMode ? '#10B981' : '#059669') : (isDarkMode ? '#F59E0B' : '#D97706')} 
+              />
+              <Text style={[
+                styles.syncText, 
+                { color: syncStatus === 'SUCCESS' ? (isDarkMode ? '#10B981' : '#059669') : (isDarkMode ? '#FCD34D' : '#92400E') }
+              ]}>
+                {syncStatus === 'SUCCESS' 
+                  ? 'All incidents synchronized successfully' 
+                  : syncStatus === 'SYNCING' 
+                    ? `Synchronizing ${pendingCount} incident(s)...`
+                    : `${pendingCount} incident(s) pending synchronization`}
+              </Text>
+            </View>
+          )}
+
+          {/* Emergency SOS Card */}
+          <TouchableOpacity 
+            style={[styles.actionCard, { backgroundColor: '#D32F2F', marginBottom: 14 }]} 
+            activeOpacity={0.85}
+            onPress={handleSOS}
+          >
+            <View style={styles.actionIconBadge}>
+              <Ionicons name="warning" size={26} color="#FFFFFF" />
+            </View>
+
+            <View style={styles.verticalDivider} />
+
+            <View style={styles.actionTextContainer}>
+              <Text style={styles.actionTitle}>EMERGENCY SOS</Text>
+              <Text style={styles.actionDescription}>
+                Broadcast emergency alert and live GPS location to park managers immediately.
+              </Text>
+            </View>
+
+            <View style={styles.arrowBadge}>
+              <Ionicons name="alert-circle" size={18} color="#D32F2F" />
+            </View>
+          </TouchableOpacity>
+
           {/* Action Card */}
           <TouchableOpacity 
             style={[styles.actionCard, { backgroundColor: theme.primary }]} 
@@ -123,13 +210,24 @@ export default function RangerDashboard() {
                 <Ionicons name="document-text" size={20} color={theme.primary} style={{ marginRight: 6 }} />
                 <Text style={[styles.recentSectionTitle, { color: theme.textPrimary }]}>Recent Incidents</Text>
               </View>
-              <TouchableOpacity style={styles.viewAllBtn}>
+              <TouchableOpacity style={styles.viewAllBtn} onPress={() => router.push('/(ranger)/my-incidents')}>
                 <Text style={[styles.viewAllText, { color: theme.primary }]}>View All</Text>
                 <Ionicons name="arrow-forward" size={14} color={theme.primary} style={{ marginLeft: 2 }} />
               </TouchableOpacity>
             </View>
 
-            {/* Empty State Box */}
+            {incidentsLoading ? (
+              <ActivityIndicator color={theme.primary} style={{ paddingVertical: AppTheme.spacing.lg }} />
+            ) : recentIncidents.length > 0 ? (
+              recentIncidents.map((incident) => (
+                <IncidentCard
+                  key={incident.id}
+                  incident={incident}
+                  onPress={() => router.push('/(ranger)/my-incidents')}
+                />
+              ))
+            ) : (
+            /* Empty State Box */
             <View style={[styles.emptyCard, { backgroundColor: theme.emptyCardBg, borderColor: isDarkMode ? '#334155' : '#B0BEC5' }]}>
               <View style={[styles.emptyIconBg, { backgroundColor: isDarkMode ? '#334155' : '#E3F2FD' }]}>
                 <Ionicons name="document-text-outline" size={32} color={isDarkMode ? '#94A3B8' : '#546E7A'} />
@@ -139,6 +237,7 @@ export default function RangerDashboard() {
                 Once you report an incident, it will appear here for easy tracking and management.
               </Text>
             </View>
+            )}
           </View>
 
         </View>
@@ -257,6 +356,28 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
     fontWeight: '600',
+  },
+  syncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  syncWarning: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FDE68A',
+  },
+  syncSuccess: {
+    backgroundColor: '#D1FAE5',
+    borderColor: '#A7F3D0',
+  },
+  syncText: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 8,
+    flex: 1,
   },
   actionCard: {
     borderRadius: 14,

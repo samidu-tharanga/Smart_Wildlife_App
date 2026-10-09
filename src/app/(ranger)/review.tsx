@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -7,7 +7,6 @@ import { AppTheme } from '../../theme';
 import { Button } from '../../components/ui/Button';
 import { INCIDENT_TYPES } from '../../constants/incidents';
 import { IncidentService } from '../../services/incidentService';
-import { useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 
 export default function IncidentReviewScreen() {
@@ -23,7 +22,7 @@ export default function IncidentReviewScreen() {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
-      await IncidentService.submitIncident({
+      const result = await IncidentService.submitIncident({
         type: type as string,
         description: description as string,
         photoUri: photoUri ? (photoUri as string) : null,
@@ -31,7 +30,10 @@ export default function IncidentReviewScreen() {
         longitude: Number(longitude),
       });
 
-      router.replace('/(ranger)/success');
+      router.replace({
+        pathname: '/(ranger)/success',
+        params: { status: result.status }
+      });
     } catch (error: any) {
       Alert.alert("Submission Failed", error.message);
     } finally {
