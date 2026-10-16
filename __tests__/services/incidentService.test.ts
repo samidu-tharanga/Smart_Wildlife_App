@@ -1,7 +1,19 @@
 import { IncidentService, IncidentSubmissionData } from '../../src/services/incidentService';
 import { auth, db } from '../../src/services/firebase';
-import { uploadImageToStorage } from '../../src/services/storageUtils';
-import { collection, addDoc, getDocs, doc, updateDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { uploadImageToStorage, convertUriToBase64 } from '../../src/services/storageUtils';
+import { OfflineStorageService } from '../../src/services/offlineStorageService';
+import * as Network from 'expo-network';
+import {
+  collection,
+  addDoc,
+  setDoc,
+  doc,
+  getDocs,
+  query,
+  where,
+  onSnapshot,
+  serverTimestamp,
+} from 'firebase/firestore';
 
 jest.mock('../../src/services/firebase', () => ({
   auth: {
@@ -10,19 +22,41 @@ jest.mock('../../src/services/firebase', () => ({
   db: {},
 }));
 
+jest.mock('expo-network', () => ({
+  getNetworkStateAsync: jest.fn(),
+}));
+
+jest.mock('../../src/services/offlineStorageService', () => ({
+  OfflineStorageService: {
+    saveIncidentOffline: jest.fn(),
+  },
+}));
+
 jest.mock('../../src/services/storageUtils', () => ({
   uploadImageToStorage: jest.fn(),
+  convertUriToBase64: jest.fn(),
 }));
 
 jest.mock('firebase/firestore', () => ({
   collection: jest.fn(),
   addDoc: jest.fn(),
+  setDoc: jest.fn(),
   getDocs: jest.fn(),
   doc: jest.fn(),
-  updateDoc: jest.fn(),
   serverTimestamp: jest.fn(() => ({ _methodName: 'serverTimestamp' })),
   query: jest.fn(),
-  orderBy: jest.fn(),
+  where: jest.fn(),
+  onSnapshot: jest.fn(),
+  Timestamp: Object.assign(
+    function MockTimestamp(this: any, seconds: number, nanoseconds: number) {
+      this.seconds = seconds;
+      this.nanoseconds = nanoseconds;
+      this.toMillis = () => seconds * 1000;
+    },
+    {
+      fromMillis: jest.fn((ms) => ({ toMillis: () => ms })),
+    }
+  ),
 }));
 
 describe('IncidentService', () => {
@@ -42,6 +76,10 @@ describe('IncidentService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (auth as any).currentUser = mockUser;
+    (Network.getNetworkStateAsync as jest.Mock).mockResolvedValue({
+      isConnected: true,
+      isInternetReachable: true,
+    });
   });
 
   describe('submitIncident', () => {
@@ -54,14 +92,30 @@ describe('IncidentService', () => {
       expect(addDoc).not.toHaveBeenCalled();
     });
 
-    it('successfully uploads photo and saves incident document to Firestore', async () => {
+    it('saves incident offline when device has no network connection', async () => {
+      (Network.getNetworkStateAsync as jest.Mock).mockResolvedValue({
+        isConnected: false,
+      });
+      (OfflineStorageService.saveIncidentOffline as jest.Mock).mockResolvedValue('offline_local_id_999');
+
+      const result = await IncidentService.submitIncident(sampleReportData);
+
+      expect(result).toEqual({ id: 'offline_local_id_999', status: 'OFFLINE' });
+      expect(OfflineStorageService.saveIncidentOffline).toHaveBeenCalledWith(
+        sampleReportData,
+        'ranger_test_uid_456'
+      );
+      expect(addDoc).not.toHaveBeenCalled();
+    });
+
+    it('successfully uploads photo and saves incident document to Firestore when online', async () => {
       const mockStorageUrl = 'https://firebasestorage.googleapis.com/v0/b/bucket/o/incidents%2Fphoto.jpg?alt=media';
       (uploadImageToStorage as jest.Mock).mockResolvedValue(mockStorageUrl);
       (addDoc as jest.Mock).mockResolvedValue({ id: 'incident_doc_789' });
 
-      const docId = await IncidentService.submitIncident(sampleReportData);
+      const result = await IncidentService.submitIncident(sampleReportData);
 
-      expect(docId).toBe('incident_doc_789');
+      expect(result).toEqual({ id: 'incident_doc_789', status: 'SYNCED' });
       expect(uploadImageToStorage).toHaveBeenCalledWith(
         sampleReportData.photoUri,
         expect.stringMatching(/^incidents\/ranger_test_uid_456_\d+\.jpg$/)
@@ -81,17 +135,19 @@ describe('IncidentService', () => {
       );
     });
 
-    it('falls back to local photoUri if Firebase Storage upload fails', async () => {
+    it('falls back to base64 conversion if Firebase Storage upload fails', async () => {
       (uploadImageToStorage as jest.Mock).mockRejectedValue(new Error('Storage unavailable'));
+      (convertUriToBase64 as jest.Mock).mockResolvedValue('data:image/jpeg;base64,mockbase64');
       (addDoc as jest.Mock).mockResolvedValue({ id: 'incident_fallback_101' });
 
-      const docId = await IncidentService.submitIncident(sampleReportData);
+      const result = await IncidentService.submitIncident(sampleReportData);
 
-      expect(docId).toBe('incident_fallback_101');
+      expect(result).toEqual({ id: 'incident_fallback_101', status: 'SYNCED' });
+      expect(convertUriToBase64).toHaveBeenCalledWith(sampleReportData.photoUri);
       expect(addDoc).toHaveBeenCalledWith(
         undefined,
         expect.objectContaining({
-          photoUrl: sampleReportData.photoUri, // Fallback to local URI
+          photoUrl: 'data:image/jpeg;base64,mockbase64',
           status: 'SUBMITTED',
         })
       );
@@ -104,9 +160,9 @@ describe('IncidentService', () => {
       };
       (addDoc as jest.Mock).mockResolvedValue({ id: 'incident_no_photo_202' });
 
-      const docId = await IncidentService.submitIncident(reportWithoutPhoto);
+      const result = await IncidentService.submitIncident(reportWithoutPhoto);
 
-      expect(docId).toBe('incident_no_photo_202');
+      expect(result).toEqual({ id: 'incident_no_photo_202', status: 'SYNCED' });
       expect(uploadImageToStorage).not.toHaveBeenCalled();
       expect(addDoc).toHaveBeenCalledWith(
         undefined,
@@ -128,10 +184,10 @@ describe('IncidentService', () => {
     });
 
     it('re-throws existing friendly failure message directly', async () => {
-      (addDoc as jest.Mock).mockRejectedValue(new Error('Custom database failure details'));
+      (addDoc as jest.Mock).mockRejectedValue(new Error('Custom failure details occurred'));
 
       await expect(IncidentService.submitIncident(sampleReportData)).rejects.toThrow(
-        'Custom database failure details'
+        'Custom failure details occurred'
       );
     });
 
@@ -144,101 +200,373 @@ describe('IncidentService', () => {
     });
   });
 
-  describe('Manager Workflow - getIncidents', () => {
-    it('retrieves all incident records ordered by createdAt desc', async () => {
-      const mockDocs = [
-        {
-          id: 'incident_1',
-          data: () => ({
-            incidentType: 'snare',
-            description: 'Trap near sector 1',
-            latitude: 6.9,
-            longitude: 79.8,
-            photoUrl: 'https://url/1.jpg',
-            status: 'SUBMITTED',
-          }),
-        },
-        {
-          id: 'incident_2',
-          data: () => ({
-            incidentType: 'carcass',
-            description: 'Dead deer',
-            latitude: 7.1,
-            longitude: 80.2,
-            photoUrl: null,
-            status: 'UNDER_REVIEW',
-          }),
-        },
-      ];
+  describe('submitPublicIncident (Community Reporting)', () => {
+    it('submits public incident successfully without requiring login', async () => {
+      (auth as any).currentUser = null; // Unauthenticated
+      (addDoc as jest.Mock).mockResolvedValue({ id: 'public_doc_555' });
 
-      (getDocs as jest.Mock).mockResolvedValue({
-        docs: mockDocs,
+      const docId = await IncidentService.submitPublicIncident({
+        type: 'carcass',
+        description: 'Dead wild boar near village border',
+        photoUri: null,
+        latitude: 6.9,
+        longitude: 79.8,
+        villagerName: 'Sunil Perera',
+        villagerContact: '0771234567',
       });
 
-      const incidents = await IncidentService.getIncidents();
-
-      expect(incidents).toHaveLength(2);
-      expect(incidents[0].id).toBe('incident_1');
-      expect(incidents[0].status).toBe('SUBMITTED');
-      expect(incidents[1].id).toBe('incident_2');
-      expect(incidents[1].status).toBe('UNDER_REVIEW');
+      expect(docId).toBe('public_doc_555');
+      expect(addDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          reporterType: 'COMMUNITY',
+          villagerName: 'Sunil Perera',
+          villagerContact: '0771234567',
+          status: 'SUBMITTED',
+          isEmergency: true,
+        })
+      );
     });
 
-    it('handles query failure and throws friendly error message', async () => {
-      (getDocs as jest.Mock).mockRejectedValue(new Error('Firestore read failed'));
+    it('submits public incident with photo and falls back to base64 if storage fails', async () => {
+      (uploadImageToStorage as jest.Mock).mockRejectedValue(new Error('Storage unavailable'));
+      (convertUriToBase64 as jest.Mock).mockResolvedValue('data:image/jpeg;base64,publicphoto');
+      (addDoc as jest.Mock).mockResolvedValue({ id: 'public_doc_photo' });
 
-      await expect(IncidentService.getIncidents()).rejects.toThrow(
-        'Firestore read failed'
+      const docId = await IncidentService.submitPublicIncident({
+        type: 'snare',
+        description: 'Snare found by river',
+        photoUri: 'file:///photo.jpg',
+        latitude: 6.9,
+        longitude: 79.8,
+      });
+
+      expect(docId).toBe('public_doc_photo');
+      expect(convertUriToBase64).toHaveBeenCalledWith('file:///photo.jpg');
+      expect(addDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          photoUrl: 'data:image/jpeg;base64,publicphoto',
+          villagerName: 'Anonymous Villager',
+        })
+      );
+    });
+
+    it('maps permission-denied error for public incident submission', async () => {
+      const permError: any = new Error('Missing permission');
+      permError.code = 'permission-denied';
+      (addDoc as jest.Mock).mockRejectedValue(permError);
+
+      await expect(
+        IncidentService.submitPublicIncident({
+          type: 'snare',
+          description: 'Snare spotted',
+          photoUri: null,
+          latitude: 6.9,
+          longitude: 79.8,
+        })
+      ).rejects.toThrow('Permission denied to submit report. Please check database permissions.');
+    });
+
+    it('handles unexpected failure during public incident submission', async () => {
+      (addDoc as jest.Mock).mockRejectedValue(new Error('Network error'));
+
+      await expect(
+        IncidentService.submitPublicIncident({
+          type: 'snare',
+          description: 'Snare spotted',
+          photoUri: null,
+          latitude: 6.9,
+          longitude: 79.8,
+        })
+      ).rejects.toThrow('Network error');
+    });
+  });
+
+  describe('submitCloudIncident (Offline Sync)', () => {
+    it('uses setDoc with incidentId to prevent duplicate records during sync', async () => {
+      (uploadImageToStorage as jest.Mock).mockResolvedValue('https://storage.url/cloud.jpg');
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
+
+      await IncidentService.submitCloudIncident(
+        sampleReportData,
+        'incident_offline_123',
+        'ranger_test_uid_456'
+      );
+
+      expect(setDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          rangerId: 'ranger_test_uid_456',
+          status: 'SUBMITTED',
+          synchronizationStatus: 'SYNCED',
+        })
+      );
+    });
+
+    it('throws error when submitCloudIncident fails', async () => {
+      (uploadImageToStorage as jest.Mock).mockResolvedValue('https://storage.url/cloud.jpg');
+      (setDoc as jest.Mock).mockRejectedValue(new Error('Cloud sync write failed'));
+
+      await expect(
+        IncidentService.submitCloudIncident(
+          sampleReportData,
+          'incident_offline_123',
+          'ranger_test_uid_456'
+        )
+      ).rejects.toThrow('Cloud sync write failed');
+    });
+  });
+
+  describe('Manager Incident Actions', () => {
+    it('throws authentication error for manager actions if user is logged out', async () => {
+      (auth as any).currentUser = null;
+
+      await expect(IncidentService.startProcessingIncident('inc_1')).rejects.toThrow('Authentication required.');
+      await expect(IncidentService.closeIncident('inc_1', 'Reason')).rejects.toThrow('Authentication required.');
+      await expect(IncidentService.linkIncidentToPatrol('inc_1', 'patrol_1')).rejects.toThrow('Authentication required.');
+      await expect(IncidentService.resolveIncidentIfLinked('patrol_1')).rejects.toThrow('Authentication required.');
+    });
+
+    it('starts processing incident and records reviewer information', async () => {
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
+
+      await IncidentService.startProcessingIncident('inc_100');
+
+      expect(setDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          status: 'PROCESSING',
+          reviewedBy: 'ranger_test_uid_456',
+        }),
+        { merge: true }
+      );
+    });
+
+    it('closes incident with closure reason', async () => {
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
+
+      await IncidentService.closeIncident('inc_100', 'False alarm confirmed');
+
+      expect(setDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          status: 'CLOSED',
+          closureReason: 'False alarm confirmed',
+          closedBy: 'ranger_test_uid_456',
+        }),
+        { merge: true }
+      );
+    });
+
+    it('links incident to assigned patrol', async () => {
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
+
+      await IncidentService.linkIncidentToPatrol('inc_100', 'patrol_assignment_42');
+
+      expect(setDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          status: 'ASSIGNED',
+          assignedPatrolId: 'patrol_assignment_42',
+          assignedBy: 'ranger_test_uid_456',
+        }),
+        { merge: true }
+      );
+    });
+
+    it('resolves incidents linked to a completed patrol', async () => {
+      (getDocs as jest.Mock).mockResolvedValue({
+        docs: [{ id: 'inc_linked_1' }],
+      });
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
+
+      await IncidentService.resolveIncidentIfLinked('patrol_assignment_42', 'Wire snare removed');
+
+      expect(setDoc).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({
+          status: 'RESOLVED',
+          resolutionOutcome: 'Wire snare removed',
+        }),
+        { merge: true }
       );
     });
   });
 
-  describe('Manager Workflow - updateIncidentStatus', () => {
-    it('throws error when invalid incident ID is provided', async () => {
-      await expect(IncidentService.updateIncidentStatus('', 'ACTION_TAKEN')).rejects.toThrow(
-        'Invalid incident ID provided.'
-      );
-      expect(updateDoc).not.toHaveBeenCalled();
-    });
+  describe('Real-time Incident Subscriptions & Logging', () => {
+    it('logs an incident alert via logIncident', async () => {
+      const { logIncident } = require('../../src/services/incidentService');
+      (setDoc as jest.Mock).mockResolvedValue(undefined);
 
-    it('successfully updates status with manager action notes', async () => {
-      (updateDoc as jest.Mock).mockResolvedValue(undefined);
+      await logIncident({
+        animalName: 'Elephant',
+        species: 'Elephas maximus',
+        incidentType: 'snare',
+        zoneName: 'North Gate',
+      });
 
-      await IncidentService.updateIncidentStatus(
-        'incident_doc_789',
-        'ACTION_TAKEN',
-        'Dispatched rapid patrol team to dismantle the wire snares.'
-      );
-
-      expect(updateDoc).toHaveBeenCalledWith(
+      expect(setDoc).toHaveBeenCalledWith(
         undefined,
         expect.objectContaining({
-          status: 'ACTION_TAKEN',
-          actionTakenNotes: 'Dispatched rapid patrol team to dismantle the wire snares.',
-          actionTakenAt: expect.anything(),
+          animalName: 'Elephant',
+          species: 'Elephas maximus',
         })
       );
     });
 
-    it('successfully updates status without action notes if none provided', async () => {
-      (updateDoc as jest.Mock).mockResolvedValue(undefined);
+    it('subscribes to incident alerts via subscribeToIncidents', () => {
+      const { subscribeToIncidents } = require('../../src/services/incidentService');
+      const callback = jest.fn();
+      let capturedSnapshotCallback: any;
 
-      await IncidentService.updateIncidentStatus('incident_doc_789', 'UNDER_REVIEW');
+      (onSnapshot as jest.Mock).mockImplementation((q, onNext) => {
+        capturedSnapshotCallback = onNext;
+        return jest.fn();
+      });
 
-      expect(updateDoc).toHaveBeenCalledWith(
-        undefined,
+      subscribeToIncidents(callback);
+
+      capturedSnapshotCallback({
+        docs: [
+          {
+            id: 'alert_1',
+            data: () => ({
+              incidentType: 'snare',
+              animalName: 'Deer',
+              zoneName: 'Sector 3',
+              time: '10 mins ago',
+            }),
+          },
+        ],
+      });
+
+      expect(callback).toHaveBeenCalledWith([
         expect.objectContaining({
-          status: 'UNDER_REVIEW',
-        })
-      );
+          id: 'alert_1',
+          species: 'snare',
+          animalName: 'Deer',
+          zoneName: 'Sector 3',
+        }),
+      ]);
     });
 
-    it('throws descriptive error when updateDoc fails', async () => {
-      (updateDoc as jest.Mock).mockRejectedValue(new Error('Write permission denied'));
+    it('subscribes to ranger incidents and orders newest first', () => {
+      const callback = jest.fn();
+      const errorCallback = jest.fn();
+      let capturedSnapshotCallback: any;
+      let capturedErrorCallback: any;
 
-      await expect(
-        IncidentService.updateIncidentStatus('incident_doc_789', 'RESOLVED', 'Completed')
-      ).rejects.toThrow('Write permission denied');
+      (onSnapshot as jest.Mock).mockImplementation((q, onNext, onError) => {
+        capturedSnapshotCallback = onNext;
+        capturedErrorCallback = onError;
+        return jest.fn();
+      });
+
+      IncidentService.subscribeToRangerIncidents('ranger_test_uid_456', callback, errorCallback);
+
+      expect(onSnapshot).toHaveBeenCalled();
+
+      const { Timestamp } = require('firebase/firestore');
+
+      // Trigger snapshot callback with mock documents
+      capturedSnapshotCallback({
+        docs: [
+          {
+            id: 'doc_old',
+            data: () => ({
+              incidentType: 'snare',
+              description: 'Old snare',
+              latitude: 6.9,
+              longitude: 79.8,
+              status: 'SUBMITTED',
+              createdAt: Object.assign(new (Timestamp as any)(1, 0), { toMillis: () => 1000 }),
+            }),
+          },
+          {
+            id: 'doc_new',
+            data: () => ({
+              incidentType: 'campsite',
+              description: 'New campsite',
+              latitude: 7.0,
+              longitude: 80.0,
+              status: 'SUBMITTED',
+              createdAt: Object.assign(new (Timestamp as any)(2, 0), { toMillis: () => 2000 }),
+            }),
+          },
+        ],
+      });
+
+      expect(callback).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'doc_new', createdAt: 2000 }),
+        expect.objectContaining({ id: 'doc_old', createdAt: 1000 }),
+      ]);
+
+      // Trigger error callback
+      const testError = new Error('Snapshot listener failed');
+      capturedErrorCallback(testError);
+      expect(errorCallback).toHaveBeenCalledWith(testError);
+    });
+
+    it('subscribes to all incidents for manager and resolves ranger/villager display names', async () => {
+      const callback = jest.fn();
+      let capturedSnapshotCallback: any;
+
+      (onSnapshot as jest.Mock).mockImplementation((q, onNext) => {
+        capturedSnapshotCallback = onNext;
+        return jest.fn();
+      });
+
+      // Mock user_roles query to resolve ranger display names
+      (getDocs as jest.Mock).mockResolvedValue({
+        docs: [
+          {
+            id: 'ranger_123',
+            data: () => ({ displayName: 'Ranger Kamal' }),
+          },
+        ],
+      });
+
+      IncidentService.subscribeToAllIncidents(callback);
+
+      const { Timestamp } = require('firebase/firestore');
+
+      await capturedSnapshotCallback({
+        docs: [
+          {
+            id: 'inc_r1',
+            data: () => ({
+              rangerId: 'ranger_123',
+              incidentType: 'snare',
+              description: 'Wire snare',
+              createdAt: Object.assign(new (Timestamp as any)(10, 0), { toMillis: () => 10000 }),
+            }),
+          },
+          {
+            id: 'inc_v1',
+            data: () => ({
+              rangerId: null,
+              reporterType: 'COMMUNITY',
+              villagerName: 'Kamal Perera',
+              incidentType: 'carcass',
+              description: 'Dead boar',
+              createdAt: 5000,
+            }),
+          },
+        ],
+      });
+
+      expect(callback).toHaveBeenCalledWith([
+        expect.objectContaining({
+          id: 'inc_r1',
+          rangerName: 'Ranger (Ranger Kamal)',
+        }),
+        expect.objectContaining({
+          id: 'inc_v1',
+          rangerName: 'Villager - Kamal Perera',
+        }),
+      ]);
     });
   });
 });
+
