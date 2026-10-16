@@ -136,6 +136,29 @@ export default function LoginScreen() {
             <Text style={styles.buttonText}>Log In</Text>
             <Ionicons name="arrow-forward" size={20} color={COLORS.white} style={{marginLeft: 8}} />
           </TouchableOpacity>
+
+          {/* Emergency Alert Divider */}
+          <View style={styles.dividerContainer}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR EMERGENCY REPORT</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          {/* Red Emergency Wildlife Alert Button for Villagers */}
+          <TouchableOpacity 
+            style={styles.emergencyReportButton}
+            onPress={() => router.push('/public-report')}
+            activeOpacity={0.85}
+          >
+            <View style={styles.emergencyIconBg}>
+              <Ionicons name="warning" size={24} color="#DC2626" />
+            </View>
+            <View style={styles.emergencyTextContainer}>
+              <Text style={styles.emergencyReportTitle}>Report Wildlife Incident / Snare</Text>
+              <Text style={styles.emergencyReportSubtitle}>Villager Emergency Alert • No login required</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#DC2626" />
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.footerText}>Secure Access for Authorized Personnel Only</Text>
@@ -165,6 +188,62 @@ const styles = StyleSheet.create({
   
   button: { flexDirection: 'row', backgroundColor: COLORS.primary, padding: 15, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 10 },
   buttonText: { color: COLORS.white, fontWeight: 'bold', fontSize: 16 },
+
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  dividerText: {
+    marginHorizontal: 10,
+    color: '#94A3B8',
+    fontWeight: '700',
+    fontSize: 10.5,
+    letterSpacing: 0.8,
+  },
+  emergencyReportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  emergencyIconBg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FEE2E2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  emergencyTextContainer: {
+    flex: 1,
+  },
+  emergencyReportTitle: {
+    color: '#991B1B',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  emergencyReportSubtitle: {
+    color: '#DC2626',
+    fontSize: 11.5,
+    marginTop: 2,
+    fontWeight: '500',
+  },
 
   footerText: { textAlign: 'center', color: 'rgba(255,255,255,0.6)', fontSize: 12, position: 'absolute', bottom: 25, width: '100%' }
 });

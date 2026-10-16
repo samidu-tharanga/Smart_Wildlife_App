@@ -286,10 +286,18 @@ export function IncidentReportsTab() {
                   />
                   <DetailItem
                     icon="person-outline"
-                    label="Reporting Ranger"
+                    label="Reported By"
                     value={selectedIncident.rangerName || selectedIncident.rawData?.rangerId || 'Unknown'}
                     theme={theme}
                   />
+                  {selectedIncident.rawData?.villagerContact && (
+                    <DetailItem
+                      icon="call-outline"
+                      label="Contact Number"
+                      value={selectedIncident.rawData.villagerContact}
+                      theme={theme}
+                    />
+                  )}
                   <DetailItem
                     icon="time-outline"
                     label="Reported Date & Time"

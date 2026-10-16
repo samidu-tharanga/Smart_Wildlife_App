@@ -24,6 +24,16 @@ export interface IncidentSubmissionData {
   longitude: number;
 }
 
+export interface PublicIncidentSubmissionData {
+  type: string;
+  description: string;
+  photoUri: string | null;
+  latitude: number;
+  longitude: number;
+  villagerName?: string;
+  villagerContact?: string;
+}
+
 export interface IncidentSubmissionResult {
   id: string;
   status: 'SYNCED' | 'OFFLINE';
@@ -80,6 +90,51 @@ export const subscribeToIncidents = (callback: (incidents: IncidentAlert[]) => v
 };
 
 export class IncidentService {
+  /**
+   * Submits a public/community incident report from villagers (Emergency Wildlife Alert).
+   * Does not require authentication.
+   */
+  static async submitPublicIncident(data: PublicIncidentSubmissionData): Promise<string> {
+    try {
+      let photoUrl = null;
+
+      if (data.photoUri) {
+        try {
+          const fileName = `incidents/community_${Date.now()}.jpg`;
+          photoUrl = await uploadImageToStorage(data.photoUri, fileName);
+        } catch (uploadErr: any) {
+          console.warn("Storage upload failed, fallback to base64 for community report:", uploadErr.message);
+          photoUrl = await convertUriToBase64(data.photoUri);
+        }
+      }
+
+      const docData = {
+        rangerId: null,
+        reporterType: 'COMMUNITY',
+        villagerName: data.villagerName?.trim() || 'Anonymous Villager',
+        villagerContact: data.villagerContact?.trim() || null,
+        incidentType: data.type,
+        description: data.description,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        photoUrl: photoUrl,
+        createdAt: serverTimestamp(),
+        synchronizationStatus: 'SYNCED',
+        status: 'SUBMITTED',
+        isEmergency: true,
+      };
+
+      const docRef = await addDoc(collection(db, 'incidents'), docData);
+      return docRef.id;
+    } catch (error: any) {
+      console.error("Community Incident Submission Error:", error);
+      if (error.code === 'permission-denied') {
+        throw new Error("Permission denied to submit report. Please check database permissions.");
+      }
+      throw new Error(error.message || "Failed to submit community incident report.");
+    }
+  }
+
   /**
    * Submits a complete incident report.
    * Handles photo upload to Storage and document creation in Firestore,
@@ -266,6 +321,19 @@ export class IncidentService {
                 ? data.createdAt
                 : Date.now();
 
+            const isVillager = data.reporterType === 'COMMUNITY' || !data.rangerId;
+            let resolvedReporterName = '';
+
+            if (isVillager) {
+              const villagerName = data.villagerName?.trim();
+              resolvedReporterName = villagerName && villagerName !== 'Anonymous Villager' 
+                ? `Villager - ${villagerName}` 
+                : 'Villager';
+            } else {
+              const rName = rangerNames[data.rangerId] || data.rangerId;
+              resolvedReporterName = rName ? `Ranger (${rName})` : 'Ranger';
+            }
+
             return {
               id: d.id,
               incidentType: data.incidentType ?? 'unknown',
@@ -276,7 +344,7 @@ export class IncidentService {
               status: data.status ?? 'SUBMITTED',
               createdAt,
               isPendingSync: false,
-              rangerName: rangerNames[data.rangerId] || data.rangerId || 'Unknown Ranger',
+              rangerName: resolvedReporterName,
               rawData: data,
             };
           });
